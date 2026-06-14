@@ -617,10 +617,9 @@ struct Index {
         this.showHardReminder = true;
         this.scheduleHardReminderDismiss();
       }
-    } else if (result.activeAlerts.length === 0 && this.reminderAction !== ReminderAction.HARD) {
-      this.reminderAction = ReminderAction.NONE;
-      this.reminderAlertType = PostureAlertType.NONE;
-      this.reminderMessage = '';
+    } else if (this.reminderAction !== ReminderAction.HARD &&
+      !result.activeAlerts.includes(this.reminderAlertType)) {
+      this.clearReminderDisplay();
     }
     this.reminderText = this.reminderAction === ReminderAction.NONE ?
       actionLabel(result.action, result.primaryAlert) :
@@ -1038,10 +1037,13 @@ struct Index {
     this.cancelHardReminderTimer();
     this.stopReminderFeedback();
     this.reminderText = text;
+    this.clearReminderDisplay();
+    this.showHardReminder = false;
+  }
+  private clearReminderDisplay(): void {
     this.reminderAction = ReminderAction.NONE;
     this.reminderAlertType = PostureAlertType.NONE;
     this.reminderMessage = '';
-    this.showHardReminder = false;
   }
   private cancelHardReminderTimer(): void {
     if (this.hardReminderTimer >= 0) {
