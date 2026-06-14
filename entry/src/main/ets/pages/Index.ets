@@ -1,5 +1,5 @@
 import { abilityAccessCtrl, common, Permissions } from '@kit.AbilityKit';
-import { buildCalibrationProfile } from '../models/PostureCalibration';
+import { buildCalibrationProfile, inspectCalibrationSamples } from '../models/PostureCalibration';
 import { evaluatePosture } from '../models/PostureEvaluator';
 import { ReminderEngine, actionLabel, alertTypeLabel, alertTypeSubtitle, alertTypeTitle } from '../models/ReminderEngine';
 import { HourBucket, buildAlertBreakdown, buildRecentBuckets, computeTodayStats } from '../models/SessionStats';
@@ -607,6 +607,12 @@ struct Index {
         }
       }
       const next = this.copySettings(this.settings);
+      const quality = inspectCalibrationSamples(samples);
+      if (!quality.isUsable) {
+        this.summary = '校准失败';
+        this.reminderText = quality.detail;
+        return;
+      }
       next.profile = buildCalibrationProfile(samples, this.settings.profile);
       this.settings = next;
       this.summary = '已记录当前基线';

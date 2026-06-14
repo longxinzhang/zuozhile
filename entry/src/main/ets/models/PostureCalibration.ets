@@ -6,13 +6,25 @@ import {
 } from './PostureTypes';
 
 const MIN_POINT_SCORE = 0.35;
+const MIN_VALID_FACE_FRAMES = 5;
+const MIN_VALID_SHOULDER_FRAMES = 5;
+const MIN_VALID_NOSE_SHOULDER_FRAMES = 3;
+
+export interface CalibrationSampleQuality {
+  totalCount: number;
+  faceCount: number;
+  shoulderCount: number;
+  noseShoulderCount: number;
+  isUsable: boolean;
+  detail: string;
+}
 
 function reliable(point?: Point2D): boolean {
   return point !== undefined && point.score >= MIN_POINT_SCORE;
 }
 
 function median(values: number[], fallback: number): number {
-  const scoped = values.filter((value: number) => !Number.isNaN(value));
+  const scoped = values.filter((value: number) => Number.isFinite(value));
   if (scoped.length === 0) {
     return fallback;
   }
@@ -41,6 +53,65 @@ function neckAngle(nose: Point2D, left: Point2D, right: Point2D): number {
     return 90;
   }
   return Math.atan2(Math.abs(dx), Math.abs(dy)) * 180 / Math.PI;
+}
+
+export function inspectCalibrationSamples(samples: PostureSample[]): CalibrationSampleQuality {
+  let faceCount = 0;
+  let shoulderCount = 0;
+  let noseShoulderCount = 0;
+  samples.forEach((sample: PostureSample) => {
+    if (sample.face.confidence >= 0.25) {
+      faceCount += 1;
+    }
+    const nose = sample.skeleton.nose;
+    const left = sample.skeleton.leftShoulder;
+    const right = sample.skeleton.rightShoulder;
+    if (reliable(left) && reliable(right)) {
+      shoulderCount += 1;
+      if (reliable(nose)) {
+        noseShoulderCount += 1;
+      }
+    }
+  });
+
+  if (faceCount < MIN_VALID_FACE_FRAMES) {
+    return {
+      totalCount: samples.length,
+      faceCount,
+      shoulderCount,
+      noseShoulderCount,
+      isUsable: false,
+      detail: '人脸识别不足，请正对屏幕并保持脸在画面内'
+    };
+  }
+  if (shoulderCount < MIN_VALID_SHOULDER_FRAMES) {
+    return {
+      totalCount: samples.length,
+      faceCount,
+      shoulderCount,
+      noseShoulderCount,
+      isUsable: false,
+      detail: '肩膀识别不足，请让头肩和上半身进入画面'
+    };
+  }
+  if (noseShoulderCount < MIN_VALID_NOSE_SHOULDER_FRAMES) {
+    return {
+      totalCount: samples.length,
+      faceCount,
+      shoulderCount,
+      noseShoulderCount,
+      isUsable: false,
+      detail: '头肩关键点不足，请摆好健康姿势后重试'
+    };
+  }
+  return {
+    totalCount: samples.length,
+    faceCount,
+    shoulderCount,
+    noseShoulderCount,
+    isUsable: true,
+    detail: '校准样本有效'
+  };
 }
 
 export function buildCalibrationProfile(samples: PostureSample[], previous?: CalibrationProfile): CalibrationProfile {

@@ -59,7 +59,7 @@ export interface PostureSample {
 
 实现参考 `/Users/zhanglongxin/Downloads/坐姿守护App_算法设计与开发参考文档.md`：
 
-- `PostureCalibration.ets`：`记录基线` 采集 10 帧，分别对 pitch、roll、yaw、人脸中心/高度/面积、肩中点/肩宽、鼻肩比和嘴部比例取中位数。
+- `PostureCalibration.ets`：`记录基线` 采集 10 帧；至少 5 帧识别人脸、5 帧识别双肩、3 帧同时识别鼻点与双肩后，才分别对 pitch、roll、yaw、人脸中心/高度/面积、肩中点/肩宽、鼻肩比和嘴部比例取中位数；样本不足时返回失败提示并保留旧基线。
 - `PostureEvaluator.ets`：
   - D1 低头/颈前屈：拆成 ITEM_03「抬头」和 ITEM_05「下巴收」；第 3 项反复触发后由提醒引擎升级为 ITEM_10「屏幕抬高」。
   - D3 含胸/驼背：肩宽压缩且脸面积未明显膨胀时触发 ITEM_01「挺起来」；脸面积明显膨胀或下滑辅助信号触发 ITEM_07「靠回椅背」。
@@ -102,6 +102,10 @@ export interface PostureSample {
   - `./scripts/verify-app.sh` 通过，signed HAP 安装启动成功，设备进程 pid `40958`。
   - 真机点击 `抽样一次` 后页面显示 `上次采样 20:32:30 · 2 秒 抽帧`。
   - `hilog -T ZuozhileCamera` 显示前置相机、JPEG 解码、PixelMap 和 Core Vision 检测链路完成；本次画面无脸/骨架时也正常返回空结果，没有采样失败。
+- 20:38 版本验证：
+  - 校准采样新增质量门槛，识别到的人脸、双肩和头肩关键点数量不足时不保存新基线。
+  - `./scripts/verify-app.sh` 通过，signed HAP 安装启动成功，设备进程 pid `50583`。
+  - 真机点击 `记录基线` 后完成 10 次真实抽帧；当前画面 `骨架 0 · 人脸 0`，页面显示 `校准失败` 和 `人脸识别不足，请正对屏幕并保持脸在画面内`。
 
 后续真机阶段继续观察：
 
