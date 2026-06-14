@@ -135,6 +135,7 @@ struct Index {
   private timer: number = -1;
   private hardReminderTimer: number = -1;
   private guardRunId: number = 0;
+  private pageRunId: number = 0;
   private isSampling: boolean = false;
   private lastSample?: PostureSample;
   private sitCandidateKey: string = '';
@@ -148,11 +149,13 @@ struct Index {
   private reminder: ReminderEngine = new ReminderEngine();
   private postureSource: PostureSource = new MockPostureSource();
   aboutToAppear(): void {
+    this.pageRunId += 1;
     if (!this.loaded) {
       this.loadData();
     }
   }
   aboutToDisappear(): void {
+    this.pageRunId += 1;
     this.stopGuard();
   }
   private abilityContext(): common.UIAbilityContext | undefined {
@@ -219,6 +222,9 @@ struct Index {
   }
   private actionOpacity(): number {
     return this.controlsLocked() ? 0.55 : 1;
+  }
+  private isCurrentPageRun(runId: number): boolean {
+    return runId === this.pageRunId;
   }
   private async startGuard(ignoreOperationLock: boolean = false): Promise<void> {
     if (this.isGuarding || (!ignoreOperationLock && this.controlsLocked())) {
@@ -374,10 +380,11 @@ struct Index {
       return;
     }
     const runId = this.guardRunId;
+    const pageRunId = this.pageRunId;
     this.isSampling = true;
     try {
       const sample = await this.postureSource.sample(this.settings.profile);
-      if (!force && (!this.isGuarding || runId !== this.guardRunId)) {
+      if (!this.isCurrentPageRun(pageRunId) || (!force && (!this.isGuarding || runId !== this.guardRunId))) {
         return;
       }
       this.lastSample = sample;
@@ -389,7 +396,7 @@ struct Index {
       this.appendRecord(result);
       this.syncSourceStatus();
     } catch (error) {
-      if (!force && (!this.isGuarding || runId !== this.guardRunId)) {
+      if (!this.isCurrentPageRun(pageRunId) || (!force && (!this.isGuarding || runId !== this.guardRunId))) {
         return;
       }
       this.summary = '采样失败';
@@ -578,14 +585,18 @@ struct Index {
     if (this.controlsLocked() || this.isSampling) {
       return;
     }
+    const pageRunId = this.pageRunId;
     this.isManualOperation = true;
     const samples: PostureSample[] = [];
     try {
       if (this.isGuarding) {
         await this.stopGuard();
+        if (!this.isCurrentPageRun(pageRunId)) {
+          return;
+        }
       }
       const sourceReady = await this.prepareSourceAccess();
-      if (!sourceReady) {
+      if (!this.isCurrentPageRun(pageRunId) || !sourceReady) {
         return;
       }
 
@@ -594,16 +605,28 @@ struct Index {
         this.summary = second.toString() + '秒后开始校准，请摆好健康姿势';
         this.reminderText = '准备记录健康坐姿基线';
         await this.sleep(CALIBRATION_COUNTDOWN_DELAY_MS);
+        if (!this.isCurrentPageRun(pageRunId)) {
+          return;
+        }
       }
       await this.rebuildPostureSource();
+      if (!this.isCurrentPageRun(pageRunId)) {
+        return;
+      }
       for (let index = 0; index < CALIBRATION_FRAME_COUNT; index += 1) {
         this.summary = '开始校准，别乱动哦，' + (index + 1).toString() + '/' + CALIBRATION_FRAME_COUNT.toString();
         this.reminderText = '正在记录健康坐姿基线';
         const sample = await this.postureSource.sample(this.settings.profile);
+        if (!this.isCurrentPageRun(pageRunId)) {
+          return;
+        }
         this.lastSample = sample;
         samples.push(sample);
         if (index < CALIBRATION_FRAME_COUNT - 1) {
           await this.sleep(CALIBRATION_SAMPLE_DELAY_MS);
+          if (!this.isCurrentPageRun(pageRunId)) {
+            return;
+          }
         }
       }
       const next = this.copySettings(this.settings);
@@ -622,13 +645,18 @@ struct Index {
       this.resetReminderState('暂无提醒');
       this.persistData();
     } catch (error) {
+      if (!this.isCurrentPageRun(pageRunId)) {
+        return;
+      }
       this.summary = '校准失败';
       this.reminderText = '请确认人脸和上半身在画面内';
     } finally {
       if (this.isSampling) {
         await this.postureSource.dispose();
-        this.postureSource = this.createPostureSource();
-        this.syncSourceStatus();
+        if (this.isCurrentPageRun(pageRunId)) {
+          this.postureSource = this.createPostureSource();
+          this.syncSourceStatus();
+        }
       }
       this.isSampling = false;
       this.isManualOperation = false;
@@ -812,6 +840,7 @@ struct Index {
     if (this.controlsLocked() || this.isSampling) {
       return;
     }
+    const pageRunId = this.pageRunId;
     this.isManualOperation = true;
     if (this.isGuarding) {
       try {
@@ -823,13 +852,18 @@ struct Index {
     }
     try {
       const sourceReady = await this.prepareSourceAccess();
-      if (!sourceReady) {
+      if (!this.isCurrentPageRun(pageRunId) || !sourceReady) {
         return;
       }
       await this.rebuildPostureSource();
+      if (!this.isCurrentPageRun(pageRunId)) {
+        return;
+      }
       await this.captureFrame(true);
       await this.postureSource.dispose();
-      this.syncSourceStatus();
+      if (this.isCurrentPageRun(pageRunId)) {
+        this.syncSourceStatus();
+      }
     } finally {
       this.isManualOperation = false;
     }
