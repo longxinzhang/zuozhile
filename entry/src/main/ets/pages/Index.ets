@@ -819,6 +819,26 @@ struct Index {
   private recentRecords(): SessionRecord[] {
     return this.records.slice(0, 6);
   }
+  private recentRecordLabel(record: SessionRecord): string {
+    const type = record.alertType ? record.alertType : PostureAlertType.NONE;
+    if (record.action !== ReminderAction.NONE) {
+      return actionLabel(record.action, type);
+    }
+    if (type !== PostureAlertType.NONE) {
+      return '识别 · ' + alertTypeLabel(type);
+    }
+    return '无问题';
+  }
+  private recentRecordColor(record: SessionRecord): string {
+    const type = record.alertType ? record.alertType : PostureAlertType.NONE;
+    if (record.action !== ReminderAction.NONE) {
+      return reminderColor(record.action);
+    }
+    if (type !== PostureAlertType.NONE) {
+      return this.alertBreakdownColor(type);
+    }
+    return GREEN;
+  }
   private formatClock(timestamp: number): string {
     const date = new Date(timestamp);
     return date.getHours().toString().padStart(2, '0') + ':' +
@@ -1702,9 +1722,9 @@ struct Index {
               .fontSize(13)
               .fontColor(INK)
               .layoutWeight(1)
-            Text(actionLabel(record.action, record.alertType ? record.alertType : PostureAlertType.NONE))
+            Text(this.recentRecordLabel(record))
               .fontSize(12)
-              .fontColor(reminderColor(record.action))
+              .fontColor(this.recentRecordColor(record))
           }
           .height(44)
           .width('100%')
