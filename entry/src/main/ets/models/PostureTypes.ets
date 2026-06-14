@@ -144,6 +144,12 @@ export interface TodayStats {
   uprightMinutes: number;
 }
 
+export interface AlertBreakdownItem {
+  type: PostureAlertType;
+  count: number;
+  percent: number;
+}
+
 export function createDefaultCalibration(): CalibrationProfile {
   return {
     neutralNeckAngle: 7,

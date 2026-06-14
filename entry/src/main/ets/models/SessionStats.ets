@@ -1,10 +1,22 @@
-import { PostureLevel, ReminderAction, SessionRecord, TodayStats } from './PostureTypes';
+import { AlertBreakdownItem, PostureAlertType, PostureLevel, ReminderAction, SessionRecord, TodayStats } from './PostureTypes';
 
 export interface HourBucket {
   label: string;
   score: number;
   badRate: number;
 }
+
+const ALERT_PRIORITY: PostureAlertType[] = [
+  PostureAlertType.ITEM_02,
+  PostureAlertType.ITEM_01,
+  PostureAlertType.ITEM_07,
+  PostureAlertType.ITEM_03,
+  PostureAlertType.ITEM_05,
+  PostureAlertType.ITEM_10,
+  PostureAlertType.ITEM_06,
+  PostureAlertType.ITEM_11,
+  PostureAlertType.ITEM_12
+];
 
 function sameDay(left: number, right: number): boolean {
   const a = new Date(left);
@@ -77,4 +89,39 @@ export function buildRecentBuckets(records: SessionRecord[]): HourBucket[] {
     });
   }
   return buckets;
+}
+
+export function buildAlertBreakdown(records: SessionRecord[]): AlertBreakdownItem[] {
+  const scoped = todayRecords(records).filter((record: SessionRecord) => record.alertType !== PostureAlertType.NONE);
+  const total = scoped.length;
+  if (total === 0) {
+    return [];
+  }
+
+  const counts: number[] = ALERT_PRIORITY.map(() => 0);
+  scoped.forEach((record: SessionRecord) => {
+    const index = ALERT_PRIORITY.indexOf(record.alertType);
+    if (index >= 0) {
+      counts[index] += 1;
+    }
+  });
+
+  const items: AlertBreakdownItem[] = [];
+  ALERT_PRIORITY.forEach((type: PostureAlertType, index: number) => {
+    const count = counts[index];
+    if (count > 0) {
+      items.push({
+        type,
+        count,
+        percent: Math.round(count * 100 / total)
+      });
+    }
+  });
+
+  return items.sort((left: AlertBreakdownItem, right: AlertBreakdownItem) => {
+    if (right.count !== left.count) {
+      return right.count - left.count;
+    }
+    return ALERT_PRIORITY.indexOf(left.type) - ALERT_PRIORITY.indexOf(right.type);
+  });
 }

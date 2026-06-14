@@ -1,9 +1,10 @@
 import { abilityAccessCtrl, common, Permissions } from '@kit.AbilityKit';
 import { buildCalibrationProfile } from '../models/PostureCalibration';
 import { evaluatePosture } from '../models/PostureEvaluator';
-import { ReminderEngine, actionLabel, alertTypeSubtitle, alertTypeTitle } from '../models/ReminderEngine';
-import { HourBucket, buildRecentBuckets, computeTodayStats } from '../models/SessionStats';
+import { ReminderEngine, actionLabel, alertTypeLabel, alertTypeSubtitle, alertTypeTitle } from '../models/ReminderEngine';
+import { HourBucket, buildAlertBreakdown, buildRecentBuckets, computeTodayStats } from '../models/SessionStats';
 import {
+  AlertBreakdownItem,
   AppData,
   MetricResult,
   PostureAlertType,
@@ -778,6 +779,29 @@ struct Index {
   private todayStats(): TodayStats {
     return computeTodayStats(this.records, this.settings.profile.sampleIntervalMs);
   }
+  private alertBreakdown(): AlertBreakdownItem[] {
+    return buildAlertBreakdown(this.records);
+  }
+  private alertBreakdownColor(type: PostureAlertType): string {
+    if (type === PostureAlertType.ITEM_02 || type === PostureAlertType.ITEM_01 ||
+      type === PostureAlertType.ITEM_07) {
+      return RED;
+    }
+    if (type === PostureAlertType.ITEM_03 || type === PostureAlertType.ITEM_05 ||
+      type === PostureAlertType.ITEM_10) {
+      return YELLOW;
+    }
+    if (type === PostureAlertType.ITEM_11) {
+      return BLUE;
+    }
+    return GREEN;
+  }
+  private alertPercentText(item: AlertBreakdownItem): string {
+    if (item.percent === 0 && item.count > 0) {
+      return '<1%';
+    }
+    return item.percent.toString() + '%';
+  }
   private recentBuckets(): HourBucket[] {
     return buildRecentBuckets(this.records);
   }
@@ -1429,6 +1453,7 @@ struct Index {
   private StatsPage() {
     Column({ space: 14 }) {
       this.TodaySummary()
+      this.AlertBreakdownPanel()
       this.HourChart()
       this.RecentList()
     }
@@ -1460,6 +1485,69 @@ struct Index {
         SmallCounter({ label: '纠正', value: this.todayStats().badCount, color: RED })
       }
       .width('100%')
+    }
+    .width('100%')
+    .padding(16)
+    .backgroundColor(SURFACE)
+    .borderRadius(8)
+    .border({ width: 1, color: LINE })
+  }
+  @Builder
+  private AlertBreakdownPanel() {
+    Column({ space: 12 }) {
+      Row() {
+        Text('今日问题')
+          .fontSize(20)
+          .fontWeight(FontWeight.Bold)
+          .fontColor(INK)
+        Blank()
+        Text(this.alertBreakdown().length.toString() + ' 类')
+          .fontSize(13)
+          .fontColor(MUTED)
+      }
+      .width('100%')
+      if (this.alertBreakdown().length === 0) {
+        Text('暂无姿势提醒')
+          .height(56)
+          .fontSize(15)
+          .fontColor(MUTED)
+          .textAlign(TextAlign.Center)
+          .width('100%')
+          .lineHeight(56)
+          .backgroundColor('#F9FAF7')
+          .borderRadius(8)
+      } else {
+        ForEach(this.alertBreakdown().slice(0, 5), (item: AlertBreakdownItem) => {
+          Column({ space: 6 }) {
+            Row() {
+              Text(alertTypeLabel(item.type))
+                .fontSize(14)
+                .fontWeight(FontWeight.Bold)
+                .fontColor(INK)
+              Blank()
+              Text(item.count.toString() + '次 · ' + this.alertPercentText(item))
+                .fontSize(12)
+                .fontColor(MUTED)
+            }
+            .width('100%')
+            Row() {
+              Text('')
+                .height(8)
+                .width(Math.max(8, item.percent).toString() + '%')
+                .backgroundColor(this.alertBreakdownColor(item.type))
+                .borderRadius(4)
+            }
+            .width('100%')
+            .height(8)
+            .backgroundColor('#EDF2EA')
+            .borderRadius(4)
+          }
+          .width('100%')
+          .padding({ left: 10, right: 10, top: 10, bottom: 10 })
+          .backgroundColor('#F9FAF7')
+          .borderRadius(8)
+        }, (item: AlertBreakdownItem) => item.type)
+      }
     }
     .width('100%')
     .padding(16)
