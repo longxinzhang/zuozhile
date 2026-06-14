@@ -101,6 +101,7 @@ struct Index {
   @State private activeTab: number = 0;
   @State private isGuarding: boolean = false;
   @State private isStartingGuard: boolean = false;
+  @State private isStoppingGuard: boolean = false;
   @State private isManualOperation: boolean = false;
   @State private settings: UserSettings = createDefaultSettings();
   @State private records: SessionRecord[] = [];
@@ -152,11 +153,14 @@ struct Index {
     this.pageRunId += 1;
     if (!this.loaded) {
       this.loadData();
+    } else if (!this.isGuarding) {
+      this.guardWindowText = this.guardWindow.statusDetail();
+      this.syncIdleSourceStatus();
     }
   }
   aboutToDisappear(): void {
     this.pageRunId += 1;
-    this.stopGuard();
+    this.stopGuard(false);
   }
   private abilityContext(): common.UIAbilityContext | undefined {
     const hostContext = this.getUIContext().getHostContext();
@@ -218,7 +222,7 @@ struct Index {
     PostureSessionStore.save(context, data);
   }
   private controlsLocked(): boolean {
-    return this.isManualOperation || this.isStartingGuard;
+    return this.isManualOperation || this.isStartingGuard || this.isStoppingGuard;
   }
   private actionOpacity(): number {
     return this.controlsLocked() ? 0.55 : 1;
@@ -287,21 +291,40 @@ struct Index {
       }
     }
   }
-  private async stopGuard(): Promise<void> {
+  private async stopGuard(updateUi: boolean = true): Promise<void> {
+    if (this.isStoppingGuard) {
+      return;
+    }
+    this.isStoppingGuard = true;
     this.guardRunId += 1;
     this.isStartingGuard = false;
-    if (this.timer >= 0) {
-      clearInterval(this.timer);
-      this.timer = -1;
+    try {
+      if (this.timer >= 0) {
+        clearInterval(this.timer);
+        this.timer = -1;
+      }
+      this.isGuarding = false;
+      this.resetDisplayStability();
+      if (updateUi) {
+        this.resetReminderState('守护已暂停');
+      } else {
+        this.cancelHardReminderTimer();
+        this.stopReminderFeedback();
+        this.showHardReminder = false;
+        this.reminderAction = ReminderAction.NONE;
+        this.reminderAlertType = PostureAlertType.NONE;
+        this.reminderMessage = '';
+      }
+      await this.postureSource.dispose();
+      this.isSampling = false;
+      await this.guardWindow.leave(this.abilityContext());
+      if (updateUi) {
+        this.guardWindowText = this.guardWindow.statusDetail();
+        this.syncSourceStatus();
+      }
+    } finally {
+      this.isStoppingGuard = false;
     }
-    this.isGuarding = false;
-    this.resetDisplayStability();
-    this.resetReminderState('守护已暂停');
-    await this.postureSource.dispose();
-    this.isSampling = false;
-    await this.guardWindow.leave(this.abilityContext());
-    this.guardWindowText = this.guardWindow.statusDetail();
-    this.syncSourceStatus();
   }
   private async prepareSourceAccess(): Promise<boolean> {
     if (!this.settings.useCoreVision) {
