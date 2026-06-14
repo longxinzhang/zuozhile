@@ -777,7 +777,7 @@ struct Index {
     }, HARD_REMINDER_TIMEOUT_MS);
   }
   private notifyReminder(action: ReminderAction): void {
-    ReminderFeedbackService.notify(action, this.settings.vibration);
+    ReminderFeedbackService.notify(action, this.settings.vibration, this.settings.gentleSound);
   }
   private stopReminderFeedback(): void {
     ReminderFeedbackService.stop();
