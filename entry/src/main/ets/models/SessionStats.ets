@@ -24,6 +24,16 @@ function sameDay(left: number, right: number): boolean {
   return a.getFullYear() === b.getFullYear() && a.getMonth() === b.getMonth() && a.getDate() === b.getDate();
 }
 
+function hasBadMetric(record: SessionRecord): boolean {
+  return record.sitLevel === PostureLevel.BAD || record.chinLevel === PostureLevel.BAD ||
+    record.mouthLevel === PostureLevel.BAD;
+}
+
+function hasWarnMetric(record: SessionRecord): boolean {
+  return record.sitLevel === PostureLevel.WARN || record.chinLevel === PostureLevel.WARN ||
+    record.mouthLevel === PostureLevel.WARN;
+}
+
 export function todayRecords(records: SessionRecord[]): SessionRecord[] {
   const now = Date.now();
   return records.filter((record: SessionRecord) => sameDay(record.timestamp, now));
@@ -38,10 +48,9 @@ export function computeTodayStats(records: SessionRecord[], sampleIntervalMs: nu
   let remindCount = 0;
   scoped.forEach((record: SessionRecord) => {
     scoreTotal += record.score;
-    if (record.sitLevel === PostureLevel.BAD || record.chinLevel === PostureLevel.BAD) {
+    if (hasBadMetric(record)) {
       badCount += 1;
-    } else if (record.sitLevel === PostureLevel.WARN || record.chinLevel === PostureLevel.WARN ||
-      record.mouthLevel === PostureLevel.WARN) {
+    } else if (hasWarnMetric(record)) {
       warnCount += 1;
     } else {
       uprightCount += 1;
@@ -77,7 +86,7 @@ export function buildRecentBuckets(records: SessionRecord[]): HourBucket[] {
     let badCount = 0;
     recordsInHour.forEach((record: SessionRecord) => {
       scoreTotal += record.score;
-      if (record.sitLevel === PostureLevel.BAD || record.chinLevel === PostureLevel.BAD) {
+      if (hasBadMetric(record)) {
         badCount += 1;
       }
     });

@@ -891,6 +891,9 @@ struct Index {
     }
     return GREEN;
   }
+  private recentLevelSummary(record: SessionRecord): string {
+    return levelText(record.sitLevel) + '/' + levelText(record.chinLevel) + '/' + levelText(record.mouthLevel);
+  }
   private formatClock(timestamp: number): string {
     const date = new Date(timestamp);
     return date.getHours().toString().padStart(2, '0') + ':' +
@@ -1911,10 +1914,11 @@ struct Index {
               .fontSize(18)
               .fontWeight(FontWeight.Bold)
               .fontColor(scoreColor(record.score))
-            Text(levelText(record.sitLevel) + ' / ' + levelText(record.chinLevel))
-              .fontSize(13)
+            Text(this.recentLevelSummary(record))
+              .fontSize(12)
               .fontColor(INK)
               .layoutWeight(1)
+              .maxLines(1)
             Text(this.recentRecordLabel(record))
               .fontSize(12)
               .fontColor(this.recentRecordColor(record))
