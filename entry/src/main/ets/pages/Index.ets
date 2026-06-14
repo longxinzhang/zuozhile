@@ -1051,6 +1051,7 @@ struct Index {
   }
   private clearHardReminder(): void {
     this.cancelHardReminderTimer();
+    this.stopReminderFeedback();
     this.showHardReminder = false;
     if (this.reminderAction === ReminderAction.HARD) {
       this.reminderAction = ReminderAction.NONE;
