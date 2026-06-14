@@ -1201,52 +1201,10 @@ struct Index {
   @Builder
   private PostureDemoFigure() {
     Stack() {
-      Path({
-        width: 116,
-        height: 124,
-        commands: this.postureBackPath()
-      })
-        .fill('#00000000')
-        .stroke(this.postureSoftStrokeColor())
-        .strokeWidth(10)
-        .strokeLineCap(LineCapStyle.Round)
-      Path({
-        width: 116,
-        height: 124,
-        commands: this.postureSpinePath()
-      })
-        .fill('#00000000')
-        .stroke(this.postureToneColor())
-        .strokeWidth(8)
-        .strokeLineCap(LineCapStyle.Round)
-      Path({
-        width: 116,
-        height: 124,
-        commands: this.postureShoulderPath()
-      })
-        .fill('#00000000')
-        .stroke(this.postureToneColor())
-        .strokeWidth(5)
-        .strokeLineCap(LineCapStyle.Round)
-      Circle({ width: 28, height: 28 })
-        .fill(this.postureToneColor())
-        .position({ x: this.postureHeadX(), y: this.postureHeadY() })
-      Circle({ width: 10, height: 10 })
-        .fill(SURFACE)
-        .stroke(this.postureToneColor())
-        .strokeWidth(4)
-        .position({ x: this.postureNeckX(), y: this.postureNeckY() })
-      if (this.primaryPostureAlert() !== PostureAlertType.NONE) {
-        Text(this.postureCueSymbol())
-          .width(34)
-          .height(34)
-          .fontSize(26)
-          .fontWeight(FontWeight.Bold)
-          .fontColor(this.postureToneColor())
-          .textAlign(TextAlign.Center)
-          .lineHeight(34)
-          .position({ x: 78, y: 42 })
-      }
+      Image(this.postureInsightResource())
+        .width('92%')
+        .height('92%')
+        .objectFit(ImageFit.Contain)
     }
     .width(116)
     .height(124)
@@ -1427,6 +1385,13 @@ struct Index {
     }
     return '保持屏幕略低于视线，肩膀放松，腰背自然伸展。';
   }
+  private postureInsightResource(): Resource {
+    const alert = this.primaryPostureAlert();
+    if (alert === PostureAlertType.NONE) {
+      return this.guideCorrectResource(1);
+    }
+    return this.alertIncorrectResource(alert);
+  }
   private postureToneColor(): string {
     const alert = this.primaryPostureAlert();
     if (alert === PostureAlertType.NONE) {
@@ -1449,17 +1414,6 @@ struct Index {
     }
     return YELLOW_SOFT;
   }
-  private postureSoftStrokeColor(): string {
-    const alert = this.primaryPostureAlert();
-    if (alert === PostureAlertType.NONE) {
-      return '#BFE8D0';
-    }
-    if (this.sitLevel === PostureLevel.BAD || this.chinLevel === PostureLevel.BAD ||
-      this.mouthLevel === PostureLevel.BAD) {
-      return '#F3B3AA';
-    }
-    return '#F3D18C';
-  }
   private postureFigureBackground(): string {
     const alert = this.primaryPostureAlert();
     if (alert === PostureAlertType.NONE) {
@@ -1470,91 +1424,6 @@ struct Index {
       return '#FFF1EE';
     }
     return '#FFF9EA';
-  }
-  private postureSpinePath(): string {
-    const alert = this.primaryPostureAlert();
-    if (alert === PostureAlertType.ITEM_07) {
-      return 'M54 112 C48 88 50 62 62 40';
-    }
-    if (alert === PostureAlertType.ITEM_03 || alert === PostureAlertType.ITEM_05 ||
-      alert === PostureAlertType.ITEM_10) {
-      return 'M58 114 C54 88 60 60 82 42';
-    }
-    if (alert === PostureAlertType.ITEM_01) {
-      return 'M64 114 C46 88 50 60 84 42';
-    }
-    if (alert === PostureAlertType.ITEM_02 || alert === PostureAlertType.ITEM_06) {
-      return 'M60 114 C54 88 58 60 72 38';
-    }
-    return 'M58 114 C56 88 58 60 66 36';
-  }
-  private postureBackPath(): string {
-    const alert = this.primaryPostureAlert();
-    if (alert === PostureAlertType.ITEM_07) {
-      return 'M36 114 C28 86 36 58 62 38';
-    }
-    if (alert === PostureAlertType.ITEM_03 || alert === PostureAlertType.ITEM_05 ||
-      alert === PostureAlertType.ITEM_10) {
-      return 'M38 112 C30 84 44 56 80 36';
-    }
-    if (alert === PostureAlertType.ITEM_01) {
-      return 'M36 112 C26 84 42 56 84 36';
-    }
-    if (alert === PostureAlertType.ITEM_02 || alert === PostureAlertType.ITEM_06) {
-      return 'M38 112 C32 84 46 56 72 36';
-    }
-    return 'M42 112 C38 84 44 56 64 34';
-  }
-  private postureShoulderPath(): string {
-    const alert = this.primaryPostureAlert();
-    if (alert === PostureAlertType.ITEM_02) {
-      return 'M38 64 L92 52';
-    }
-    if (alert === PostureAlertType.ITEM_01) {
-      return 'M48 66 L86 58';
-    }
-    return 'M40 64 L88 64';
-  }
-  private postureHeadX(): number {
-    const alert = this.primaryPostureAlert();
-    if (alert === PostureAlertType.ITEM_07) {
-      return 44;
-    }
-    if (alert === PostureAlertType.ITEM_01 || alert === PostureAlertType.ITEM_03 ||
-      alert === PostureAlertType.ITEM_05 || alert === PostureAlertType.ITEM_10) {
-      return 76;
-    }
-    if (alert === PostureAlertType.ITEM_02 || alert === PostureAlertType.ITEM_06) {
-      return 68;
-    }
-    return 58;
-  }
-  private postureHeadY(): number {
-    const alert = this.primaryPostureAlert();
-    if (alert === PostureAlertType.ITEM_07) {
-      return 26;
-    }
-    if (alert === PostureAlertType.ITEM_01 || alert === PostureAlertType.ITEM_03 ||
-      alert === PostureAlertType.ITEM_05 || alert === PostureAlertType.ITEM_10) {
-      return 24;
-    }
-    return 18;
-  }
-  private postureNeckX(): number {
-    return this.postureHeadX() - 1;
-  }
-  private postureNeckY(): number {
-    return this.postureHeadY() + 27;
-  }
-  private postureCueSymbol(): string {
-    const alert = this.primaryPostureAlert();
-    if (alert === PostureAlertType.ITEM_02 || alert === PostureAlertType.ITEM_06) {
-      return '↔';
-    }
-    if (alert === PostureAlertType.ITEM_11) {
-      return '·';
-    }
-    return '↑';
   }
   @Builder
   private StatsPage() {
