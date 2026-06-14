@@ -17,6 +17,7 @@ import {
 
 const STORE_NAME = 'zuozhile_session';
 const KEY_DATA = 'app_data';
+const SAMPLE_INTERVAL_OPTIONS: number[] = [2000, 3000, 5000];
 
 function numberOr(value: number, fallback: number, min: number, max: number): number {
   if (!Number.isFinite(value)) {
@@ -31,6 +32,20 @@ function numberOr(value: number, fallback: number, min: number, max: number): nu
 function normalizeSensitivity(value: number, fallback: number): number {
   const safeValue = numberOr(value, fallback, 0.6, 1.4);
   return safeValue > 1.05 ? SENSITIVE_SENSITIVITY : STANDARD_SENSITIVITY;
+}
+
+function normalizeSampleInterval(value: number, fallback: number): number {
+  const safeFallback = SAMPLE_INTERVAL_OPTIONS.includes(fallback) ? fallback : 3000;
+  if (!Number.isFinite(value) || value < 1000 || value > 10000) {
+    return safeFallback;
+  }
+  let selected = SAMPLE_INTERVAL_OPTIONS[0];
+  SAMPLE_INTERVAL_OPTIONS.forEach((option: number) => {
+    if (Math.abs(option - value) < Math.abs(selected - value)) {
+      selected = option;
+    }
+  });
+  return selected;
 }
 
 function sanitizeProfile(profile: CalibrationProfile): CalibrationProfile {
@@ -53,7 +68,7 @@ function sanitizeProfile(profile: CalibrationProfile): CalibrationProfile {
     neutralNoseToShoulderRatio: numberOr(profile.neutralNoseToShoulderRatio, defaults.neutralNoseToShoulderRatio, -5, 5),
     calibratedAt: numberOr(profile.calibratedAt, defaults.calibratedAt, 0, 4102444800000),
     sensitivity: normalizeSensitivity(profile.sensitivity, defaults.sensitivity),
-    sampleIntervalMs: numberOr(profile.sampleIntervalMs, defaults.sampleIntervalMs, 2000, 10000)
+    sampleIntervalMs: normalizeSampleInterval(profile.sampleIntervalMs, defaults.sampleIntervalMs)
   };
 }
 
