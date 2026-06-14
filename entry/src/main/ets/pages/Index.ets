@@ -120,6 +120,7 @@ struct Index {
   @State private showHardReminder: boolean = false;
   @State private showClearDataConfirm: boolean = false;
   @State private showResetCalibrationConfirm: boolean = false;
+  @State private showCoreVisionConfirm: boolean = false;
   @State private lastSampleText: string = '尚未采样';
   @State private sourceLabel: string = '真实相机检测';
   @State private sourceDetail: string = '真实相机待启动';
@@ -631,6 +632,16 @@ struct Index {
   private confirmResetCalibration(): void {
     this.resetCalibration();
   }
+  private requestToggleCoreVision(): void {
+    this.showCoreVisionConfirm = true;
+  }
+  private dismissCoreVisionConfirm(): void {
+    this.showCoreVisionConfirm = false;
+  }
+  private async confirmToggleCoreVision(): Promise<void> {
+    this.showCoreVisionConfirm = false;
+    await this.toggleCoreVision();
+  }
   private setSensitivity(value: number): void {
     const next = this.copySettings(this.settings);
     next.profile.sensitivity = value;
@@ -949,6 +960,9 @@ struct Index {
         if (this.showResetCalibrationConfirm) {
           this.ResetCalibrationConfirmOverlay()
         }
+        if (this.showCoreVisionConfirm) {
+          this.CoreVisionConfirmOverlay()
+        }
       }
       .width('100%')
       .height('100%')
@@ -1260,6 +1274,61 @@ struct Index {
             .borderRadius(8)
             .onClick(() => {
               this.confirmResetCalibration();
+            })
+        }
+        .width('100%')
+      }
+      .width('82%')
+      .padding(22)
+      .alignItems(HorizontalAlign.Center)
+      .backgroundColor(SURFACE)
+      .borderRadius(8)
+      .shadow({ radius: 18, color: '#33000000', offsetY: 8 })
+    }
+    .width('100%')
+    .height('100%')
+    .justifyContent(FlexAlign.Center)
+    .alignItems(HorizontalAlign.Center)
+    .backgroundColor('#CC171B1A')
+    .zIndex(11)
+  }
+  @Builder
+  private CoreVisionConfirmOverlay() {
+    Column() {
+      Column({ space: 16 }) {
+        Text('切换检测源？')
+          .fontSize(22)
+          .fontWeight(FontWeight.Bold)
+          .fontColor(INK)
+        Text('会停止当前守护并重置基线，请切换后重新记录基线。')
+          .fontSize(15)
+          .fontColor(MUTED)
+          .textAlign(TextAlign.Center)
+          .lineHeight(22)
+          .maxLines(2)
+        Row({ space: 10 }) {
+          Button('取消')
+            .height(44)
+            .layoutWeight(1)
+            .fontSize(15)
+            .fontWeight(FontWeight.Bold)
+            .fontColor(INK)
+            .backgroundColor('#F9FAF7')
+            .borderRadius(8)
+            .border({ width: 1, color: LINE })
+            .onClick(() => {
+              this.dismissCoreVisionConfirm();
+            })
+          Button('切换')
+            .height(44)
+            .layoutWeight(1)
+            .fontSize(15)
+            .fontWeight(FontWeight.Bold)
+            .fontColor('#FFFFFF')
+            .backgroundColor(RED)
+            .borderRadius(8)
+            .onClick(() => {
+              this.confirmToggleCoreVision();
             })
         }
         .width('100%')
@@ -2227,7 +2296,7 @@ struct Index {
         .backgroundColor(this.settings.useCoreVision ? GREEN : '#E6EBE4')
         .borderRadius(8)
         .onClick(() => {
-          this.toggleCoreVision();
+          this.requestToggleCoreVision();
         })
     }
     .height(48)
