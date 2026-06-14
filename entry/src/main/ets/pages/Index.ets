@@ -911,9 +911,13 @@ struct Index {
     if (!this.loaded) {
       this.LoadingView()
     } else {
-      Stack({ alignContent: Alignment.Bottom }) {
-        this.PageBody()
-        this.TabBar()
+      Stack() {
+        Column() {
+          this.PageBody()
+          this.TabBar()
+        }
+        .width('100%')
+        .height('100%')
         if (this.showHardReminder) {
           this.HardReminderOverlay()
         }
@@ -958,10 +962,10 @@ struct Index {
         }
       }
       .width('100%')
-      .padding({ left: 18, right: 18, top: 18, bottom: 110 })
+      .padding({ left: 18, right: 18, top: 18, bottom: 18 })
     }
     .width('100%')
-    .height('100%')
+    .layoutWeight(1)
   }
   @Builder
   private Header() {
