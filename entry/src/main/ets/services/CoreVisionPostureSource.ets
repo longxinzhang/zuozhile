@@ -58,7 +58,9 @@ export class CoreVisionPostureSource implements PostureSource {
     if (resolve) {
       resolve(photo);
     } else if (photo) {
-      photo.release();
+      this.ignoreAsyncFailure(async () => {
+        await photo.release();
+      });
     }
   };
 
@@ -94,10 +96,14 @@ export class CoreVisionPostureSource implements PostureSource {
       throw this.failStage(this.lastDetail, error as Error);
     } finally {
       if (pixelMap) {
-        await this.ignoreFailure(pixelMap.release());
+        await this.ignoreAsyncFailure(async () => {
+          await pixelMap!.release();
+        });
       }
       if (photo) {
-        await this.ignoreFailure(photo.release());
+        await this.ignoreAsyncFailure(async () => {
+          await photo!.release();
+        });
       }
     }
   }
@@ -111,20 +117,30 @@ export class CoreVisionPostureSource implements PostureSource {
       }
     }
     if (this.session) {
-      await this.ignoreFailure(this.session.stop());
-      await this.ignoreFailure(this.session.release());
+      await this.ignoreAsyncFailure(async () => {
+        await this.session!.stop();
+      });
+      await this.ignoreAsyncFailure(async () => {
+        await this.session!.release();
+      });
       this.session = undefined;
     }
     if (this.previewOutput) {
-      await this.ignoreFailure(this.previewOutput.release());
+      await this.ignoreAsyncFailure(async () => {
+        await this.previewOutput!.release();
+      });
       this.previewOutput = undefined;
     }
     if (this.photoOutput) {
-      await this.ignoreFailure(this.photoOutput.release());
+      await this.ignoreAsyncFailure(async () => {
+        await this.photoOutput!.release();
+      });
       this.photoOutput = undefined;
     }
     if (this.cameraInput) {
-      await this.ignoreFailure(this.cameraInput.close());
+      await this.ignoreAsyncFailure(async () => {
+        await this.cameraInput!.close();
+      });
       this.cameraInput = undefined;
     }
     await this.detector.release();
@@ -289,16 +305,18 @@ export class CoreVisionPostureSource implements PostureSource {
         desiredSize: targetSize,
         desiredPixelFormat: image.PixelMapFormat.RGBA_8888
       });
-      const info = pixelMap.getImageInfoSync();
-      this.markStage('创建 PixelMap · actual=' + info.size.width.toString() + 'x' +
-        info.size.height.toString() + ' format=' + info.pixelFormat.toString() +
-        ' stride=' + info.stride.toString());
+      this.markStage('创建 PixelMap · target=' + targetSize.width.toString() + 'x' +
+        targetSize.height.toString());
       return pixelMap;
     } finally {
       if (source) {
-        await this.ignoreFailure(source.release());
+        await this.ignoreAsyncFailure(async () => {
+          await source!.release();
+        });
       }
-      await this.ignoreFailure(main.release());
+      await this.ignoreAsyncFailure(async () => {
+        await main.release();
+      });
     }
   }
 
@@ -347,9 +365,9 @@ export class CoreVisionPostureSource implements PostureSource {
     return new Error(detail);
   }
 
-  private async ignoreFailure(task: Promise<void>): Promise<void> {
+  private async ignoreAsyncFailure(task: () => Promise<void>): Promise<void> {
     try {
-      await task;
+      await task();
     } catch (error) {
     }
   }

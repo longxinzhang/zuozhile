@@ -34,10 +34,18 @@ export class CoreVisionPostureDetector {
 
   async prepare(): Promise<void> {
     if (!this.skeletonDetector) {
-      this.skeletonDetector = await skeletonDetection.SkeletonDetector.create();
+      try {
+        this.skeletonDetector = await skeletonDetection.SkeletonDetector.create();
+      } catch (error) {
+        throw new Error('骨架检测初始化失败：' + this.errorSummary(error as Error));
+      }
     }
     if (!this.isFaceReady) {
-      this.isFaceReady = await faceDetector.init();
+      try {
+        this.isFaceReady = await faceDetector.init();
+      } catch (error) {
+        throw new Error('人脸检测初始化失败：' + this.errorSummary(error as Error));
+      }
     }
   }
 
