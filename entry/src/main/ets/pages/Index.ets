@@ -745,6 +745,34 @@ struct Index {
     this.sourceLabel = '模拟采样';
     this.sourceDetail = '用于验证 UI、评分和提醒流程';
   }
+  private privacyBandTitle(): string {
+    return this.settings.privacyMode ? '本机隐私' : '开发诊断';
+  }
+  private privacyBandCopy(): string {
+    if (this.settings.privacyMode) {
+      return this.settings.useCoreVision ?
+        '图像帧仅在本机内存中用于姿态判断；不显示原始相机画面。' :
+        '当前使用模拟采样验证守护流程，不读取相机图像。';
+    }
+    return this.settings.useCoreVision ?
+      '开发诊断已开启：显示相机能力和检测源细节，便于排查采样状态。' :
+      '开发诊断已开启：当前使用模拟采样验证守护流程。';
+  }
+  private cameraProbeDisplayText(): string {
+    if (!this.settings.privacyMode || !this.isCameraProbeAvailable) {
+      return this.cameraProbeText;
+    }
+    if (this.cameraProbeText.indexOf('前置摄像头可用') >= 0) {
+      return '前置摄像头可用';
+    }
+    return '相机能力已就绪';
+  }
+  private sourceDisplayText(): string {
+    if (this.settings.privacyMode) {
+      return '当前检测源：' + this.sourceLabel;
+    }
+    return '当前检测源：' + this.sourceLabel + ' · ' + this.sourceDetail;
+  }
   private resetReminderState(text: string): void {
     this.cancelHardReminderTimer();
     this.stopReminderFeedback();
@@ -1329,13 +1357,11 @@ struct Index {
   @Builder
   private PrivacyBand() {
     Column({ space: 8 }) {
-      Text('本机识别')
+      Text(this.privacyBandTitle())
         .fontSize(13)
         .fontWeight(FontWeight.Bold)
         .fontColor(GREEN)
-      Text(this.settings.useCoreVision ?
-        '图像帧只用于内存中的姿态判断；当前使用相机拍照抽帧并交给 Core Vision 检测。' :
-        '图像帧只用于内存中的姿态判断；当前使用模拟采样验证守护流程。')
+      Text(this.privacyBandCopy())
         .fontSize(14)
         .fontColor(MUTED)
         .lineHeight(20)
@@ -1343,7 +1369,7 @@ struct Index {
         .fontSize(13)
         .fontWeight(FontWeight.Bold)
         .fontColor(this.isCameraPermissionGranted ? GREEN : YELLOW)
-      Text(this.cameraProbeText)
+      Text(this.cameraProbeDisplayText())
         .fontSize(13)
         .fontWeight(FontWeight.Bold)
         .fontColor(this.isCameraProbeAvailable ? GREEN : YELLOW)
@@ -1358,7 +1384,7 @@ struct Index {
         .fontWeight(FontWeight.Bold)
         .fontColor(this.isGuarding ? GREEN : MUTED)
         .lineHeight(19)
-      Text('当前检测源：' + this.sourceLabel + ' · ' + this.sourceDetail)
+      Text(this.sourceDisplayText())
         .fontSize(13)
         .fontColor(MUTED)
         .lineHeight(19)
