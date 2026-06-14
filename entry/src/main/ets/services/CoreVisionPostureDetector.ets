@@ -21,13 +21,18 @@ function finiteOr(value: number, fallback: number): number {
 }
 
 function pointFromSkeleton(point: skeletonDetection.SkeletonPoint | undefined): Point2D | undefined {
-  if (!point) {
+  if (!point || !point.point) {
+    return undefined;
+  }
+  const x = finiteOr(point.point.x, Number.NaN);
+  const y = finiteOr(point.point.y, Number.NaN);
+  if (!Number.isFinite(x) || !Number.isFinite(y)) {
     return undefined;
   }
   return {
-    x: point.point.x,
-    y: point.point.y,
-    score: point.score
+    x,
+    y,
+    score: Math.max(0, finiteOr(point.score, 0))
   };
 }
 
@@ -138,8 +143,9 @@ export class CoreVisionPostureDetector {
     const rightHipScore = this.rawSkeletonPointScore(points, skeletonDetection.SkeletonPointType.RIGHT_HIP);
     const keyPointScore = noseScore * 2 + leftShoulderScore * 3 + rightShoulderScore * 3 +
       leftHipScore + rightHipScore;
-    const boxArea = skeleton.boundingBox ?
-      Math.max(skeleton.boundingBox.width * skeleton.boundingBox.height, 0) : 0;
+    const boxWidth = skeleton.boundingBox ? Math.max(finiteOr(skeleton.boundingBox.width, 0), 0) : 0;
+    const boxHeight = skeleton.boundingBox ? Math.max(finiteOr(skeleton.boundingBox.height, 0), 0) : 0;
+    const boxArea = boxWidth * boxHeight;
     return finiteOr(skeleton.score, 0) * 100 + keyPointScore * 100 + Math.sqrt(boxArea);
   }
 
@@ -148,7 +154,8 @@ export class CoreVisionPostureDetector {
     type: skeletonDetection.SkeletonPointType
   ): number {
     const match = points.find((point: skeletonDetection.SkeletonPoint) => point.type === type);
-    return match ? finiteOr(match.score, 0) : 0;
+    const converted = pointFromSkeleton(match);
+    return converted ? converted.score : 0;
   }
 
   private selectPrimaryFace(faces: Array<faceDetector.Face>): faceDetector.Face | undefined {
@@ -168,7 +175,9 @@ export class CoreVisionPostureDetector {
   }
 
   private faceQuality(face: faceDetector.Face): number {
-    const area = face.rect ? Math.max(face.rect.width * face.rect.height, 0) : 0;
+    const width = face.rect ? Math.max(finiteOr(face.rect.width, 0), 0) : 0;
+    const height = face.rect ? Math.max(finiteOr(face.rect.height, 0), 0) : 0;
+    const area = width * height;
     const pointCount = face.points ? face.points.length : 0;
     const landmarkScore = Math.min(pointCount, 16) / 16;
     return finiteOr(face.probability, 0) * 10000 + Math.sqrt(area) + landmarkScore * 100;
@@ -195,6 +204,9 @@ export class CoreVisionPostureDetector {
   }
 
   private safeFaceRect(face: faceDetector.Face): FaceFrame {
+    if (!face.pose || !face.rect) {
+      return this.emptyFaceFrame();
+    }
     const rect = face.rect;
     return {
       yaw: this.safeFaceNumber(face.pose.yaw),
@@ -242,9 +254,12 @@ export class CoreVisionPostureDetector {
   }
 
   private findPoint(
-    points: Array<skeletonDetection.SkeletonPoint>,
+    points: Array<skeletonDetection.SkeletonPoint> | undefined,
     type: skeletonDetection.SkeletonPointType
   ): Point2D | undefined {
+    if (!points || points.length === 0) {
+      return undefined;
+    }
     const match = points.find((point: skeletonDetection.SkeletonPoint) => point.type === type);
     return pointFromSkeleton(match);
   }
@@ -258,11 +273,13 @@ export class CoreVisionPostureDetector {
   }
 
   private estimateMouthRatio(face: faceDetector.Face): number {
-    if (!face.points || face.points.length < 2 || face.rect.height <= 0) {
+    if (!face.points || face.points.length < 2 || !face.rect || finiteOr(face.rect.height, 0) <= 0) {
       return 0.16;
     }
+    const rectTop = finiteOr(face.rect.top, 0);
+    const rectHeight = Math.max(finiteOr(face.rect.height, 0), 1);
     const lowerHalfPoints = face.points.filter((point: faceDetector.FacePoint) =>
-      point.y > face.rect.top + face.rect.height * 0.55);
+      Number.isFinite(point.y) && point.y > rectTop + rectHeight * 0.55);
     if (lowerHalfPoints.length < 2) {
       return 0.16;
     }
