@@ -124,6 +124,8 @@ struct Index {
   @State private showClearDataConfirm: boolean = false;
   @State private showResetCalibrationConfirm: boolean = false;
   @State private showCoreVisionConfirm: boolean = false;
+  @State private calibrationProgressText: string = '';
+  @State private isCalibrationProgressHealthy: boolean = true;
   @State private lastSampleText: string = '尚未采样';
   @State private sourceLabel: string = '真实相机检测';
   @State private sourceDetail: string = '真实相机待启动';
@@ -670,14 +672,20 @@ struct Index {
         }
       }
       const sourceReady = await this.prepareSourceAccess();
-      if (!this.isCurrentPageRun(pageRunId) || !sourceReady) {
+      if (!this.isCurrentPageRun(pageRunId)) {
+        return;
+      }
+      if (!sourceReady) {
+        this.setCalibrationProgress(this.reminderText, false);
         return;
       }
 
       this.isSampling = true;
       for (let second = CALIBRATION_COUNTDOWN_SECONDS; second > 0; second -= 1) {
-        this.summary = second.toString() + '秒后开始校准，请摆好健康姿势';
+        const text = second.toString() + '秒后开始校准，请摆好健康姿势';
+        this.summary = text;
         this.reminderText = '准备记录健康坐姿基线';
+        this.setCalibrationProgress(text);
         await this.sleep(CALIBRATION_COUNTDOWN_DELAY_MS);
         if (!this.isCurrentPageRun(pageRunId)) {
           return;
@@ -688,8 +696,10 @@ struct Index {
         return;
       }
       for (let index = 0; index < CALIBRATION_FRAME_COUNT; index += 1) {
-        this.summary = '开始校准，别乱动哦，' + (index + 1).toString() + '/' + CALIBRATION_FRAME_COUNT.toString();
+        const text = '开始校准，别乱动哦，' + (index + 1).toString() + '/' + CALIBRATION_FRAME_COUNT.toString();
+        this.summary = text;
         this.reminderText = '正在记录健康坐姿基线';
+        this.setCalibrationProgress(text);
         const sample = await this.postureSource.sample(this.settings.profile);
         if (!this.isCurrentPageRun(pageRunId)) {
           return;
@@ -708,6 +718,7 @@ struct Index {
       if (!quality.isUsable) {
         this.summary = '校准失败';
         this.reminderText = quality.detail;
+        this.setCalibrationProgress(quality.detail, false);
         return;
       }
       next.profile = buildCalibrationProfile(samples, this.settings.profile);
@@ -717,6 +728,7 @@ struct Index {
       this.reminder.reset();
       this.resetDisplayStability();
       this.resetReminderState('暂无提醒');
+      this.setCalibrationProgress('校准完成，已记录当前基线');
       this.persistData();
     } catch (error) {
       if (!this.isCurrentPageRun(pageRunId)) {
@@ -724,6 +736,7 @@ struct Index {
       }
       this.summary = '校准失败';
       this.reminderText = '请确认人脸和上半身在画面内';
+      this.setCalibrationProgress('请确认人脸和上半身在画面内', false);
     } finally {
       if (this.isSampling) {
         await this.postureSource.dispose();
@@ -758,6 +771,7 @@ struct Index {
     next.profile.calibratedAt = defaults.profile.calibratedAt;
     this.settings = next;
     this.summary = '已恢复默认基线';
+    this.setCalibrationProgress('已恢复默认基线');
     this.reminder.reset();
     this.resetDisplayStability();
     this.resetReminderState('暂无提醒');
@@ -1044,6 +1058,10 @@ struct Index {
     this.reminderAction = ReminderAction.NONE;
     this.reminderAlertType = PostureAlertType.NONE;
     this.reminderMessage = '';
+  }
+  private setCalibrationProgress(text: string, isHealthy: boolean = true): void {
+    this.calibrationProgressText = text;
+    this.isCalibrationProgressHealthy = isHealthy;
   }
   private cancelHardReminderTimer(): void {
     if (this.hardReminderTimer >= 0) {
@@ -2432,6 +2450,18 @@ struct Index {
         .fontSize(13)
         .fontColor(MUTED)
         .width('100%')
+      if (this.calibrationProgressText.length > 0) {
+        Text(this.calibrationProgressText)
+          .fontSize(14)
+          .fontWeight(FontWeight.Bold)
+          .fontColor(this.isCalibrationProgressHealthy ? BLUE : RED)
+          .lineHeight(20)
+          .maxLines(2)
+          .width('100%')
+          .padding({ left: 10, right: 10, top: 8, bottom: 8 })
+          .backgroundColor(this.isCalibrationProgressHealthy ? '#EAF1FF' : RED_SOFT)
+          .borderRadius(8)
+      }
       Row({ space: 10 }) {
         Button(this.isManualOperation ? '处理中' : '记录基线')
           .height(44)
