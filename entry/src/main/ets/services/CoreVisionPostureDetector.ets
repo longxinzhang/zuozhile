@@ -16,6 +16,10 @@ function emptyPoint(): Point2D {
   };
 }
 
+function finiteOr(value: number, fallback: number): number {
+  return Number.isFinite(value) ? value : fallback;
+}
+
 function pointFromSkeleton(point: skeletonDetection.SkeletonPoint | undefined): Point2D | undefined {
   if (!point) {
     return undefined;
@@ -70,7 +74,12 @@ export class CoreVisionPostureDetector {
     } catch (error) {
       throw new Error('人脸检测失败：' + this.errorSummary(error as Error));
     }
-    this.lastDetail = skeletonWarning.length > 0 ? skeletonWarning + ' · 人脸检测完成' : '骨架与人脸检测完成';
+    const skeletonCount = skeletonResponse.skeletons ? skeletonResponse.skeletons.length : 0;
+    const faceCount = faces ? faces.length : 0;
+    const countDetail = '骨架 ' + skeletonCount.toString() + ' · 人脸 ' + faceCount.toString();
+    this.lastDetail = skeletonWarning.length > 0 ?
+      skeletonWarning + ' · 人脸检测完成 · ' + countDetail :
+      '骨架与人脸检测完成 · ' + countDetail;
 
     return {
       timestamp: Date.now(),
@@ -80,14 +89,126 @@ export class CoreVisionPostureDetector {
   }
 
   async release(): Promise<void> {
+    let warning = '';
     if (this.skeletonDetector) {
-      await this.skeletonDetector.destroy();
+      const detector = this.skeletonDetector;
       this.skeletonDetector = undefined;
+      try {
+        await detector.destroy();
+      } catch (error) {
+        warning = '骨架检测释放失败：' + this.errorSummary(error as Error);
+      }
     }
     if (this.isFaceReady) {
-      await faceDetector.release();
-      this.isFaceReady = false;
+      try {
+        await faceDetector.release();
+      } catch (error) {
+        warning = warning.length > 0 ?
+          warning + ' · 人脸检测释放失败：' + this.errorSummary(error as Error) :
+          '人脸检测释放失败：' + this.errorSummary(error as Error);
+      } finally {
+        this.isFaceReady = false;
+      }
     }
+    this.lastDetail = warning.length > 0 ? warning : 'Core Vision 已释放';
+  }
+
+  private selectPrimarySkeleton(skeletons: Array<skeletonDetection.Skeleton>): skeletonDetection.Skeleton | undefined {
+    if (!skeletons || skeletons.length === 0) {
+      return undefined;
+    }
+    let selected = skeletons[0];
+    let selectedScore = this.skeletonQuality(selected);
+    skeletons.forEach((skeleton: skeletonDetection.Skeleton) => {
+      const score = this.skeletonQuality(skeleton);
+      if (score > selectedScore) {
+        selected = skeleton;
+        selectedScore = score;
+      }
+    });
+    return selected;
+  }
+
+  private skeletonQuality(skeleton: skeletonDetection.Skeleton): number {
+    const points = skeleton.points ? skeleton.points : [];
+    const noseScore = this.rawSkeletonPointScore(points, skeletonDetection.SkeletonPointType.NOSE);
+    const leftShoulderScore = this.rawSkeletonPointScore(points, skeletonDetection.SkeletonPointType.LEFT_SHOULDER);
+    const rightShoulderScore = this.rawSkeletonPointScore(points, skeletonDetection.SkeletonPointType.RIGHT_SHOULDER);
+    const leftHipScore = this.rawSkeletonPointScore(points, skeletonDetection.SkeletonPointType.LEFT_HIP);
+    const rightHipScore = this.rawSkeletonPointScore(points, skeletonDetection.SkeletonPointType.RIGHT_HIP);
+    const keyPointScore = noseScore * 2 + leftShoulderScore * 3 + rightShoulderScore * 3 +
+      leftHipScore + rightHipScore;
+    const boxArea = skeleton.boundingBox ?
+      Math.max(skeleton.boundingBox.width * skeleton.boundingBox.height, 0) : 0;
+    return finiteOr(skeleton.score, 0) * 100 + keyPointScore * 100 + Math.sqrt(boxArea);
+  }
+
+  private rawSkeletonPointScore(
+    points: Array<skeletonDetection.SkeletonPoint>,
+    type: skeletonDetection.SkeletonPointType
+  ): number {
+    const match = points.find((point: skeletonDetection.SkeletonPoint) => point.type === type);
+    return match ? finiteOr(match.score, 0) : 0;
+  }
+
+  private selectPrimaryFace(faces: Array<faceDetector.Face>): faceDetector.Face | undefined {
+    if (!faces || faces.length === 0) {
+      return undefined;
+    }
+    let selected = faces[0];
+    let selectedScore = this.faceQuality(selected);
+    faces.forEach((face: faceDetector.Face) => {
+      const score = this.faceQuality(face);
+      if (score > selectedScore) {
+        selected = face;
+        selectedScore = score;
+      }
+    });
+    return selected;
+  }
+
+  private faceQuality(face: faceDetector.Face): number {
+    const area = face.rect ? Math.max(face.rect.width * face.rect.height, 0) : 0;
+    const pointCount = face.points ? face.points.length : 0;
+    const landmarkScore = Math.min(pointCount, 16) / 16;
+    return finiteOr(face.probability, 0) * 10000 + Math.sqrt(area) + landmarkScore * 100;
+  }
+
+  private emptyFaceFrame(): FaceFrame {
+    return {
+      yaw: 0,
+      pitch: 0,
+      roll: 0,
+      mouthOpenRatio: 0.16,
+      confidence: 0,
+      rect: {
+        left: 0,
+        top: 0,
+        width: 1,
+        height: 1
+      }
+    };
+  }
+
+  private safeFaceNumber(value: number): number {
+    return finiteOr(value, 0);
+  }
+
+  private safeFaceRect(face: faceDetector.Face): FaceFrame {
+    const rect = face.rect;
+    return {
+      yaw: this.safeFaceNumber(face.pose.yaw),
+      pitch: this.safeFaceNumber(face.pose.pitch),
+      roll: this.safeFaceNumber(face.pose.roll),
+      mouthOpenRatio: this.estimateMouthRatio(face),
+      confidence: this.safeFaceNumber(face.probability),
+      rect: {
+        left: this.safeFaceNumber(rect.left),
+        top: this.safeFaceNumber(rect.top),
+        width: Math.max(this.safeFaceNumber(rect.width), 1),
+        height: Math.max(this.safeFaceNumber(rect.height), 1)
+      }
+    };
   }
 
   statusDetail(): string {
@@ -98,7 +219,10 @@ export class CoreVisionPostureDetector {
     if (!response.skeletons || response.skeletons.length === 0) {
       return {};
     }
-    const skeleton = response.skeletons[0];
+    const skeleton = this.selectPrimarySkeleton(response.skeletons);
+    if (!skeleton) {
+      return {};
+    }
     const nose = this.findPoint(skeleton.points, skeletonDetection.SkeletonPointType.NOSE);
     const leftEar = this.findPoint(skeleton.points, skeletonDetection.SkeletonPointType.LEFT_EAR);
     const rightEar = this.findPoint(skeleton.points, skeletonDetection.SkeletonPointType.RIGHT_EAR);
@@ -127,34 +251,10 @@ export class CoreVisionPostureDetector {
 
   private toFaceFrame(faces: Array<faceDetector.Face>): FaceFrame {
     if (!faces || faces.length === 0) {
-      return {
-        yaw: 0,
-        pitch: 0,
-        roll: 0,
-        mouthOpenRatio: 0.16,
-        confidence: 0,
-        rect: {
-          left: 0,
-          top: 0,
-          width: 1,
-          height: 1
-        }
-      };
+      return this.emptyFaceFrame();
     }
-    const face = faces[0];
-    return {
-      yaw: face.pose.yaw,
-      pitch: face.pose.pitch,
-      roll: face.pose.roll,
-      mouthOpenRatio: this.estimateMouthRatio(face),
-      confidence: face.probability,
-      rect: {
-        left: face.rect.left,
-        top: face.rect.top,
-        width: face.rect.width,
-        height: face.rect.height
-      }
-    };
+    const face = this.selectPrimaryFace(faces);
+    return face ? this.safeFaceRect(face) : this.emptyFaceFrame();
   }
 
   private estimateMouthRatio(face: faceDetector.Face): number {
