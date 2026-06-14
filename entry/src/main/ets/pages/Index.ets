@@ -101,6 +101,7 @@ struct Index {
   @State private activeTab: number = 0;
   @State private isGuarding: boolean = false;
   @State private isStartingGuard: boolean = false;
+  @State private isManualOperation: boolean = false;
   @State private settings: UserSettings = createDefaultSettings();
   @State private records: SessionRecord[] = [];
   @State private score: number = 92;
@@ -213,8 +214,14 @@ struct Index {
     };
     PostureSessionStore.save(context, data);
   }
+  private controlsLocked(): boolean {
+    return this.isManualOperation || this.isStartingGuard;
+  }
+  private actionOpacity(): number {
+    return this.controlsLocked() ? 0.55 : 1;
+  }
   private async startGuard(): Promise<void> {
-    if (this.isGuarding || this.isStartingGuard) {
+    if (this.isGuarding || this.controlsLocked()) {
       return;
     }
     this.isStartingGuard = true;
@@ -568,20 +575,21 @@ struct Index {
     this.persistData();
   }
   private async calibrateFromCurrent(): Promise<void> {
-    if (this.isSampling) {
+    if (this.controlsLocked() || this.isSampling) {
       return;
     }
-    if (this.isGuarding) {
-      await this.stopGuard();
-    }
-    const sourceReady = await this.prepareSourceAccess();
-    if (!sourceReady) {
-      return;
-    }
-
-    this.isSampling = true;
+    this.isManualOperation = true;
     const samples: PostureSample[] = [];
     try {
+      if (this.isGuarding) {
+        await this.stopGuard();
+      }
+      const sourceReady = await this.prepareSourceAccess();
+      if (!sourceReady) {
+        return;
+      }
+
+      this.isSampling = true;
       for (let second = CALIBRATION_COUNTDOWN_SECONDS; second > 0; second -= 1) {
         this.summary = second.toString() + '秒后开始校准，请摆好健康姿势';
         this.reminderText = '准备记录健康坐姿基线';
@@ -611,13 +619,19 @@ struct Index {
       this.summary = '校准失败';
       this.reminderText = '请确认人脸和上半身在画面内';
     } finally {
-      await this.postureSource.dispose();
-      this.postureSource = this.createPostureSource();
-      this.syncSourceStatus();
+      if (this.isSampling) {
+        await this.postureSource.dispose();
+        this.postureSource = this.createPostureSource();
+        this.syncSourceStatus();
+      }
       this.isSampling = false;
+      this.isManualOperation = false;
     }
   }
   private resetCalibration(): void {
+    if (this.controlsLocked() || this.isSampling) {
+      return;
+    }
     this.showResetCalibrationConfirm = false;
     const defaults = createDefaultSettings();
     const next = this.copySettings(this.settings);
@@ -642,6 +656,9 @@ struct Index {
     this.persistData();
   }
   private requestResetCalibration(): void {
+    if (this.controlsLocked() || this.isSampling) {
+      return;
+    }
     this.showResetCalibrationConfirm = true;
   }
   private dismissResetCalibrationConfirm(): void {
@@ -651,16 +668,25 @@ struct Index {
     this.resetCalibration();
   }
   private requestToggleCoreVision(): void {
+    if (this.controlsLocked() || this.isSampling) {
+      return;
+    }
     this.showCoreVisionConfirm = true;
   }
   private dismissCoreVisionConfirm(): void {
     this.showCoreVisionConfirm = false;
   }
   private async confirmToggleCoreVision(): Promise<void> {
+    if (this.controlsLocked() || this.isSampling) {
+      return;
+    }
     this.showCoreVisionConfirm = false;
     await this.toggleCoreVision();
   }
   private setSensitivity(value: number): void {
+    if (this.controlsLocked() || this.isSampling) {
+      return;
+    }
     const next = this.copySettings(this.settings);
     next.profile.sensitivity = value;
     this.settings = next;
@@ -670,6 +696,9 @@ struct Index {
     this.persistData();
   }
   private async setIntervalMs(value: number): Promise<void> {
+    if (this.controlsLocked() || this.isSampling) {
+      return;
+    }
     const next = this.copySettings(this.settings);
     next.profile.sampleIntervalMs = value;
     this.settings = next;
@@ -680,25 +709,33 @@ struct Index {
     }
   }
   private async toggleCoreVision(): Promise<void> {
-    if (this.isGuarding) {
-      await this.stopGuard();
+    if (this.controlsLocked() || this.isSampling) {
+      return;
     }
-    const next = this.copySettings(this.settings);
-    next.useCoreVision = !next.useCoreVision;
-    const defaults = createDefaultSettings();
-    const sensitivity = next.profile.sensitivity;
-    const sampleIntervalMs = next.profile.sampleIntervalMs;
-    next.profile = defaults.profile;
-    next.profile.sensitivity = sensitivity;
-    next.profile.sampleIntervalMs = sampleIntervalMs;
-    this.settings = next;
-    this.lastSample = undefined;
-    this.lastSampleText = '尚未采样';
-    this.resetDisplayStability();
-    this.persistData();
-    await this.rebuildPostureSource();
-    this.summary = next.useCoreVision ? '真实检测待开启' : '模拟采样待开启';
-    this.reminderText = '已重置基线，请重新记录';
+    this.isManualOperation = true;
+    try {
+      if (this.isGuarding) {
+        await this.stopGuard();
+      }
+      const next = this.copySettings(this.settings);
+      next.useCoreVision = !next.useCoreVision;
+      const defaults = createDefaultSettings();
+      const sensitivity = next.profile.sensitivity;
+      const sampleIntervalMs = next.profile.sampleIntervalMs;
+      next.profile = defaults.profile;
+      next.profile.sensitivity = sensitivity;
+      next.profile.sampleIntervalMs = sampleIntervalMs;
+      this.settings = next;
+      this.lastSample = undefined;
+      this.lastSampleText = '尚未采样';
+      this.resetDisplayStability();
+      this.persistData();
+      await this.rebuildPostureSource();
+      this.summary = next.useCoreVision ? '真实检测待开启' : '模拟采样待开启';
+      this.reminderText = '已重置基线，请重新记录';
+    } finally {
+      this.isManualOperation = false;
+    }
   }
   private togglePrivacy(): void {
     const next = this.copySettings(this.settings);
@@ -719,24 +756,35 @@ struct Index {
     this.persistData();
   }
   private async clearData(): Promise<void> {
-    this.showClearDataConfirm = false;
-    await this.stopGuard();
-    const context = this.abilityContext();
-    if (context) {
-      await PostureSessionStore.clear(context);
+    if (this.controlsLocked() || this.isSampling) {
+      return;
     }
-    const defaults = createDefaultData();
-    this.settings = this.copySettings(defaults.settings);
-    this.records = [];
-    this.reminder.reset();
-    this.resetDisplayStability();
-    this.score = 92;
-    this.summary = '坐姿在线';
-    this.resetReminderState('暂无提醒');
-    this.lastSampleText = '尚未采样';
-    await this.rebuildPostureSource();
+    this.isManualOperation = true;
+    this.showClearDataConfirm = false;
+    try {
+      await this.stopGuard();
+      const context = this.abilityContext();
+      if (context) {
+        await PostureSessionStore.clear(context);
+      }
+      const defaults = createDefaultData();
+      this.settings = this.copySettings(defaults.settings);
+      this.records = [];
+      this.reminder.reset();
+      this.resetDisplayStability();
+      this.score = 92;
+      this.summary = '坐姿在线';
+      this.resetReminderState('暂无提醒');
+      this.lastSampleText = '尚未采样';
+      await this.rebuildPostureSource();
+    } finally {
+      this.isManualOperation = false;
+    }
   }
   private requestClearData(): void {
+    if (this.controlsLocked() || this.isSampling) {
+      return;
+    }
     this.showClearDataConfirm = true;
   }
   private dismissClearDataConfirm(): void {
@@ -746,18 +794,30 @@ struct Index {
     await this.clearData();
   }
   private async sampleOnce(): Promise<void> {
+    if (this.controlsLocked() || this.isSampling) {
+      return;
+    }
+    this.isManualOperation = true;
     if (this.isGuarding) {
+      try {
+        await this.captureFrame(true);
+      } finally {
+        this.isManualOperation = false;
+      }
+      return;
+    }
+    try {
+      const sourceReady = await this.prepareSourceAccess();
+      if (!sourceReady) {
+        return;
+      }
+      await this.rebuildPostureSource();
       await this.captureFrame(true);
-      return;
+      await this.postureSource.dispose();
+      this.syncSourceStatus();
+    } finally {
+      this.isManualOperation = false;
     }
-    const sourceReady = await this.prepareSourceAccess();
-    if (!sourceReady) {
-      return;
-    }
-    await this.rebuildPostureSource();
-    await this.captureFrame(true);
-    await this.postureSource.dispose();
-    this.syncSourceStatus();
   }
   private createPostureSource(): PostureSource {
     const context = this.abilityContext();
@@ -1439,8 +1499,9 @@ struct Index {
         .fontColor('#FFFFFF')
         .backgroundColor(this.isGuarding ? RED : GREEN)
         .borderRadius(8)
+        .opacity(this.isManualOperation ? 0.55 : 1)
         .onClick(() => {
-          if (this.isStartingGuard) {
+          if (this.controlsLocked()) {
             return;
           }
           if (this.isGuarding) {
@@ -1451,7 +1512,7 @@ struct Index {
         })
       this.PostureInsightCard()
       Row({ space: 10 }) {
-        Button('记录基线')
+        Button(this.isManualOperation ? '处理中' : '记录基线')
           .height(44)
           .layoutWeight(1)
           .fontSize(15)
@@ -1460,10 +1521,11 @@ struct Index {
           .backgroundColor(SURFACE)
           .borderRadius(8)
           .border({ width: 1, color: LINE })
+          .opacity(this.actionOpacity())
           .onClick(() => {
             this.calibrateFromCurrent();
           })
-        Button('抽样一次')
+        Button(this.isManualOperation ? '处理中' : '抽样一次')
           .height(44)
           .layoutWeight(1)
           .fontSize(15)
@@ -1472,6 +1534,7 @@ struct Index {
           .backgroundColor(SURFACE)
           .borderRadius(8)
           .border({ width: 1, color: LINE })
+          .opacity(this.actionOpacity())
           .onClick(() => {
             this.sampleOnce();
           })
@@ -1619,6 +1682,9 @@ struct Index {
       })
   }
   private guardButtonText(): string {
+    if (this.isManualOperation) {
+      return '处理中';
+    }
     if (this.isStartingGuard) {
       return '启动中';
     }
@@ -2171,6 +2237,7 @@ struct Index {
         .backgroundColor(SURFACE)
         .borderRadius(8)
         .border({ width: 1, color: '#F0C9C5' })
+        .opacity(this.actionOpacity())
         .onClick(() => {
           this.requestClearData();
         })
@@ -2196,7 +2263,7 @@ struct Index {
         .fontColor(MUTED)
         .width('100%')
       Row({ space: 10 }) {
-        Button('记录基线')
+        Button(this.isManualOperation ? '处理中' : '记录基线')
           .height(44)
           .layoutWeight(1)
           .fontSize(15)
@@ -2204,6 +2271,7 @@ struct Index {
           .fontColor('#FFFFFF')
           .backgroundColor(BLUE)
           .borderRadius(8)
+          .opacity(this.actionOpacity())
           .onClick(() => {
             this.calibrateFromCurrent();
           })
@@ -2216,6 +2284,7 @@ struct Index {
           .backgroundColor('#F9FAF7')
           .borderRadius(8)
           .border({ width: 1, color: LINE })
+          .opacity(this.actionOpacity())
           .onClick(() => {
             this.requestResetCalibration();
           })
@@ -2277,6 +2346,7 @@ struct Index {
       .backgroundColor(Math.abs(value - this.settings.profile.sensitivity) < 0.01 ? BLUE : '#F9FAF7')
       .borderRadius(8)
       .border({ width: 1, color: Math.abs(value - this.settings.profile.sensitivity) < 0.01 ? BLUE : LINE })
+      .opacity(this.actionOpacity())
       .onClick(() => {
         this.setSensitivity(value);
       })
@@ -2292,6 +2362,7 @@ struct Index {
       .backgroundColor(this.settings.profile.sampleIntervalMs === value ? GREEN : '#F9FAF7')
       .borderRadius(8)
       .border({ width: 1, color: this.settings.profile.sampleIntervalMs === value ? GREEN : LINE })
+      .opacity(this.actionOpacity())
       .onClick(() => {
         this.setIntervalMs(value);
       })
@@ -2331,6 +2402,7 @@ struct Index {
         .fontColor(this.settings.useCoreVision ? '#FFFFFF' : MUTED)
         .backgroundColor(this.settings.useCoreVision ? GREEN : '#E6EBE4')
         .borderRadius(8)
+        .opacity(this.actionOpacity())
         .onClick(() => {
           this.requestToggleCoreVision();
         })
