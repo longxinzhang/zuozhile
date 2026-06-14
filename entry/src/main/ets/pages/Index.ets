@@ -133,10 +133,13 @@ struct Index {
   @State private isCameraProbeAvailable: boolean = false;
   @State private cameraPreviewSurfaceId: string = '';
   @State private guardWindowText: string = '守护窗口待开启';
+  @State private storageStatusText: string = '本地数据待加载';
+  @State private isStorageHealthy: boolean = true;
   private timer: number = -1;
   private hardReminderTimer: number = -1;
   private guardRunId: number = 0;
   private pageRunId: number = 0;
+  private storageOperationId: number = 0;
   private isSampling: boolean = false;
   private lastSample?: PostureSample;
   private sitCandidateKey: string = '';
@@ -172,10 +175,13 @@ struct Index {
   private async loadData(): Promise<void> {
     const context = this.abilityContext();
     if (context) {
-      const data = await PostureSessionStore.load(context);
-      this.applyData(data);
+      const result = await PostureSessionStore.loadWithStatus(context);
+      this.applyData(result.data);
+      this.setStorageStatus(result.isHealthy ? '本地数据已加载' : '本地数据读取失败，已使用默认数据',
+        result.isHealthy);
     } else {
       this.applyData(createDefaultData());
+      this.setStorageStatus('本地存储不可用', false);
     }
     this.loaded = true;
   }
@@ -212,6 +218,7 @@ struct Index {
   private persistData(): void {
     const context = this.abilityContext();
     if (!context) {
+      this.setStorageStatus('本地存储不可用', false);
       return;
     }
     const data: AppData = {
@@ -219,7 +226,31 @@ struct Index {
       records: this.records.slice(),
       lastUpdatedAt: Date.now()
     };
-    PostureSessionStore.save(context, data);
+    const pageRunId = this.pageRunId;
+    const operationId = this.nextStorageOperationId();
+    const savedAt = Date.now();
+    this.persistDataAsync(context, data, pageRunId, operationId, savedAt);
+  }
+  private async persistDataAsync(context: common.UIAbilityContext, data: AppData, pageRunId: number,
+    operationId: number, savedAt: number): Promise<void> {
+    let isSaved = false;
+    try {
+      isSaved = await PostureSessionStore.save(context, data);
+    } catch (error) {
+      isSaved = false;
+    }
+    if (!this.isCurrentPageRun(pageRunId) || operationId !== this.storageOperationId) {
+      return;
+    }
+    this.setStorageStatus(isSaved ? '本地数据已保存 ' + this.formatClock(savedAt) : '本地数据保存失败', isSaved);
+  }
+  private nextStorageOperationId(): number {
+    this.storageOperationId += 1;
+    return this.storageOperationId;
+  }
+  private setStorageStatus(text: string, isHealthy: boolean): void {
+    this.storageStatusText = text;
+    this.isStorageHealthy = isHealthy;
   }
   private controlsLocked(): boolean {
     return this.isManualOperation || this.isStartingGuard || this.isStoppingGuard;
@@ -845,8 +876,10 @@ struct Index {
     try {
       await this.stopGuard();
       const context = this.abilityContext();
+      const operationId = this.nextStorageOperationId();
+      let isCleared = false;
       if (context) {
-        await PostureSessionStore.clear(context);
+        isCleared = await PostureSessionStore.clear(context);
       }
       const defaults = createDefaultData();
       this.settings = this.copySettings(defaults.settings);
@@ -857,6 +890,9 @@ struct Index {
       this.summary = '坐姿在线';
       this.resetReminderState('暂无提醒');
       this.lastSampleText = '尚未采样';
+      if (operationId === this.storageOperationId) {
+        this.setStorageStatus(isCleared ? '本地数据已清空' : '本地数据清空失败', isCleared);
+      }
       await this.rebuildPostureSource();
     } finally {
       this.isManualOperation = false;
@@ -967,6 +1003,15 @@ struct Index {
       return GREEN;
     }
     return YELLOW;
+  }
+  private storageDisplayText(): string {
+    if (!this.settings.privacyMode || !this.isStorageHealthy) {
+      return this.storageStatusText;
+    }
+    return '本地数据已就绪';
+  }
+  private storageDisplayColor(): string {
+    return this.isStorageHealthy ? GREEN : RED;
   }
   private sourceDisplayText(): string {
     if (this.settings.privacyMode) {
@@ -1733,6 +1778,11 @@ struct Index {
         .fontSize(13)
         .fontWeight(FontWeight.Bold)
         .fontColor(this.isGuarding ? GREEN : MUTED)
+        .lineHeight(19)
+      Text(this.storageDisplayText())
+        .fontSize(13)
+        .fontWeight(FontWeight.Bold)
+        .fontColor(this.storageDisplayColor())
         .lineHeight(19)
       Text(this.sourceDisplayText())
         .fontSize(13)

@@ -19,6 +19,11 @@ const STORE_NAME = 'zuozhile_session';
 const KEY_DATA = 'app_data';
 const SAMPLE_INTERVAL_OPTIONS: number[] = [2000, 3000, 5000];
 
+export interface StoreLoadResult {
+  data: AppData;
+  isHealthy: boolean;
+}
+
 function numberOr(value: number, fallback: number, min: number, max: number): number {
   if (!Number.isFinite(value)) {
     return fallback;
@@ -154,35 +159,53 @@ function sanitizeData(data: AppData): AppData {
 }
 
 export class PostureSessionStore {
-  static async load(context: common.UIAbilityContext): Promise<AppData> {
+  static async loadWithStatus(context: common.UIAbilityContext): Promise<StoreLoadResult> {
     try {
       const store = await preferences.getPreferences(context, { name: STORE_NAME });
       const raw = await store.get(KEY_DATA, '');
       if (typeof raw === 'string' && raw.length > 0) {
-        return sanitizeData(JSON.parse(raw) as AppData);
+        return {
+          data: sanitizeData(JSON.parse(raw) as AppData),
+          isHealthy: true
+        };
       }
     } catch (error) {
-      return createDefaultData();
+      return {
+        data: createDefaultData(),
+        isHealthy: false
+      };
     }
-    return createDefaultData();
+    return {
+      data: createDefaultData(),
+      isHealthy: true
+    };
   }
 
-  static async save(context: common.UIAbilityContext, data: AppData): Promise<void> {
+  static async load(context: common.UIAbilityContext): Promise<AppData> {
+    const result = await PostureSessionStore.loadWithStatus(context);
+    return result.data;
+  }
+
+  static async save(context: common.UIAbilityContext, data: AppData): Promise<boolean> {
     try {
       const store = await preferences.getPreferences(context, { name: STORE_NAME });
       const next = sanitizeData(data);
       await store.put(KEY_DATA, JSON.stringify(next));
       await store.flush();
+      return true;
     } catch (error) {
+      return false;
     }
   }
 
-  static async clear(context: common.UIAbilityContext): Promise<void> {
+  static async clear(context: common.UIAbilityContext): Promise<boolean> {
     try {
       const store = await preferences.getPreferences(context, { name: STORE_NAME });
       await store.delete(KEY_DATA);
       await store.flush();
+      return true;
     } catch (error) {
+      return false;
     }
   }
 }
