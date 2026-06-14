@@ -93,6 +93,17 @@ const CALIBRATION_COUNTDOWN_DELAY_MS = 1000;
 const CALIBRATION_SAMPLE_DELAY_MS = 500;
 const HARD_REMINDER_TIMEOUT_MS = 8000;
 const DISPLAY_STABLE_FRAMES = 2;
+const REPORT_ALERT_PRIORITY: PostureAlertType[] = [
+  PostureAlertType.ITEM_02,
+  PostureAlertType.ITEM_01,
+  PostureAlertType.ITEM_07,
+  PostureAlertType.ITEM_03,
+  PostureAlertType.ITEM_05,
+  PostureAlertType.ITEM_10,
+  PostureAlertType.ITEM_06,
+  PostureAlertType.ITEM_11,
+  PostureAlertType.ITEM_12
+];
 
 @Entry
 @Component
@@ -138,11 +149,17 @@ struct Index {
   @State private guardWindowText: string = '守护窗口待开启';
   @State private storageStatusText: string = '本地数据待加载';
   @State private isStorageHealthy: boolean = true;
+  @State private sessionReportTitle: string = '';
+  @State private sessionReportMeta: string = '';
+  @State private sessionReportSummary: string = '';
+  @State private sessionReportAdvice: string = '';
+  @State private sessionReportScore: number = 0;
   private timer: number = -1;
   private hardReminderTimer: number = -1;
   private guardRunId: number = 0;
   private pageRunId: number = 0;
   private storageOperationId: number = 0;
+  private guardSessionStartedAt: number = 0;
   private isSampling: boolean = false;
   private lastSample?: PostureSample;
   private sitCandidateKey: string = '';
@@ -274,6 +291,7 @@ struct Index {
     if (this.isGuarding || (!ignoreOperationLock && this.controlsLocked())) {
       return;
     }
+    this.clearSessionReport();
     this.isStartingGuard = true;
     this.guardRunId += 1;
     const runId = this.guardRunId;
@@ -314,6 +332,7 @@ struct Index {
         return;
       }
       this.isGuarding = true;
+      this.guardSessionStartedAt = Date.now();
       this.reminder.reset();
       this.resetDisplayStability();
       this.resetReminderState('暂无提醒');
@@ -331,10 +350,12 @@ struct Index {
       }
     }
   }
-  private async stopGuard(updateUi: boolean = true): Promise<void> {
+  private async stopGuard(updateUi: boolean = true, showReport: boolean = false): Promise<void> {
     if (this.isStoppingGuard) {
       return;
     }
+    const shouldBuildReport = updateUi && showReport && this.isGuarding && this.guardSessionStartedAt > 0;
+    const sessionStartedAt = this.guardSessionStartedAt;
     this.isStoppingGuard = true;
     this.guardRunId += 1;
     this.isStartingGuard = false;
@@ -344,9 +365,13 @@ struct Index {
         this.timer = -1;
       }
       this.isGuarding = false;
+      this.guardSessionStartedAt = 0;
       this.resetDisplayStability();
       if (updateUi) {
         this.resetReminderState('守护已暂停');
+        if (shouldBuildReport) {
+          this.buildSessionReport(sessionStartedAt, Date.now());
+        }
       } else {
         this.cancelHardReminderTimer();
         this.stopReminderFeedback();
@@ -914,6 +939,7 @@ struct Index {
       const defaults = createDefaultData();
       this.settings = this.copySettings(defaults.settings);
       this.records = [];
+      this.clearSessionReport();
       this.reminder.reset();
       this.resetDisplayStability();
       this.score = 92;
@@ -1114,6 +1140,138 @@ struct Index {
       return copy + '，现在调整一下。';
     }
     return copy;
+  }
+  private clearSessionReport(): void {
+    this.sessionReportTitle = '';
+    this.sessionReportMeta = '';
+    this.sessionReportSummary = '';
+    this.sessionReportAdvice = '';
+    this.sessionReportScore = 0;
+  }
+  private buildSessionReport(startedAt: number, endedAt: number): void {
+    const scoped = this.records.filter((record: SessionRecord) => record.timestamp >= startedAt &&
+      record.timestamp <= endedAt);
+    const duration = this.sessionDurationText(startedAt, endedAt);
+    if (scoped.length === 0) {
+      this.sessionReportTitle = '本次守护报告';
+      this.sessionReportMeta = duration + ' · 暂无有效采样';
+      this.sessionReportSummary = '这次守护时间偏短，还没有形成可参考的姿态趋势。';
+      this.sessionReportAdvice = '至少连续守护 2 分钟，再根据报告调整桌椅和屏幕。';
+      this.sessionReportScore = 0;
+      return;
+    }
+
+    let scoreTotal = 0;
+    let uprightCount = 0;
+    let warnCount = 0;
+    let badCount = 0;
+    let reminderCount = 0;
+    scoped.forEach((record: SessionRecord) => {
+      scoreTotal += record.score;
+      if (this.recordHasBadMetric(record)) {
+        badCount += 1;
+      } else if (this.recordHasWarnMetric(record)) {
+        warnCount += 1;
+      } else {
+        uprightCount += 1;
+      }
+      if (record.action !== ReminderAction.NONE) {
+        reminderCount += 1;
+      }
+    });
+
+    const averageScore = Math.round(scoreTotal / scoped.length);
+    const uprightPercent = Math.round(uprightCount * 100 / scoped.length);
+    const issue = this.primarySessionIssue(scoped);
+    this.sessionReportTitle = '本次守护报告';
+    this.sessionReportMeta = duration + ' · ' + averageScore.toString() + '分 · 提醒' +
+      reminderCount.toString() + '次';
+    this.sessionReportSummary = this.sessionSummaryText(averageScore, uprightPercent, warnCount, badCount, issue);
+    this.sessionReportAdvice = this.sessionAdviceText(issue, scoped.length);
+    this.sessionReportScore = averageScore;
+  }
+  private recordHasBadMetric(record: SessionRecord): boolean {
+    return record.sitLevel === PostureLevel.BAD || record.chinLevel === PostureLevel.BAD ||
+      record.mouthLevel === PostureLevel.BAD;
+  }
+  private recordHasWarnMetric(record: SessionRecord): boolean {
+    return record.sitLevel === PostureLevel.WARN || record.chinLevel === PostureLevel.WARN ||
+      record.mouthLevel === PostureLevel.WARN;
+  }
+  private primarySessionIssue(records: SessionRecord[]): PostureAlertType {
+    const counts: number[] = REPORT_ALERT_PRIORITY.map(() => 0);
+    records.forEach((record: SessionRecord) => {
+      const index = REPORT_ALERT_PRIORITY.indexOf(record.alertType);
+      if (index >= 0) {
+        counts[index] += 1;
+      }
+    });
+
+    let bestIndex = -1;
+    let bestCount = 0;
+    counts.forEach((count: number, index: number) => {
+      if (count > bestCount) {
+        bestCount = count;
+        bestIndex = index;
+      }
+    });
+    return bestIndex >= 0 ? REPORT_ALERT_PRIORITY[bestIndex] : PostureAlertType.NONE;
+  }
+  private sessionDurationText(startedAt: number, endedAt: number): string {
+    const elapsedMs = Math.max(0, endedAt - startedAt);
+    if (elapsedMs < 60000) {
+      return '少于1分钟';
+    }
+    const minutes = Math.round(elapsedMs / 60000);
+    if (minutes < 60) {
+      return minutes.toString() + '分钟';
+    }
+    const hours = Math.floor(minutes / 60);
+    const rest = minutes % 60;
+    return hours.toString() + '小时' + (rest > 0 ? rest.toString() + '分钟' : '');
+  }
+  private sessionSummaryText(averageScore: number, uprightPercent: number, warnCount: number, badCount: number,
+    issue: PostureAlertType): string {
+    if (issue !== PostureAlertType.NONE) {
+      return '端正占比 ' + uprightPercent.toString() + '%，主要问题是' + alertTypeLabel(issue) + '。';
+    }
+    if (averageScore < 72) {
+      return '本次均分偏低，但没有形成稳定单项问题。';
+    }
+    if (badCount === 0 && warnCount === 0) {
+      return '整体稳定，端正占比 ' + uprightPercent.toString() + '%。';
+    }
+    return '整体还可以，端正占比 ' + uprightPercent.toString() + '%，有少量姿态波动。';
+  }
+  private sessionAdviceText(issue: PostureAlertType, sampleCount: number): string {
+    if (sampleCount < 2) {
+      return '守护时间再拉长一点，报告会更稳定。';
+    }
+    if (issue === PostureAlertType.ITEM_01) {
+      return '把键盘鼠标拉近一点，肩膀向后打开，背轻轻靠回椅背。';
+    }
+    if (issue === PostureAlertType.ITEM_02) {
+      return '屏幕放在正前方，双脚踩稳，重心回到椅子中间。';
+    }
+    if (issue === PostureAlertType.ITEM_03 || issue === PostureAlertType.ITEM_10) {
+      return '把屏幕垫高一点，让视线回到屏幕上缘附近。';
+    }
+    if (issue === PostureAlertType.ITEM_05) {
+      return '下巴轻轻往回收，减少脖子跟着屏幕往前探。';
+    }
+    if (issue === PostureAlertType.ITEM_06) {
+      return '头部回到身体中线，避免长期偏向一侧看屏幕。';
+    }
+    if (issue === PostureAlertType.ITEM_07) {
+      return '身体坐回椅背，手可以前伸操作，但胸口别贴近屏幕。';
+    }
+    if (issue === PostureAlertType.ITEM_11) {
+      return '下颌放松、嘴唇自然闭合，保持轻松鼻呼吸。';
+    }
+    if (issue === PostureAlertType.ITEM_12) {
+      return '起身活动 1 分钟，再回来继续工作。';
+    }
+    return '继续保持屏幕略低于视线，肩膀放松，腰背自然伸展。';
   }
   private todayStats(): TodayStats {
     return computeTodayStats(this.records, this.settings.profile.sampleIntervalMs);
@@ -1689,11 +1847,14 @@ struct Index {
             return;
           }
           if (this.isGuarding) {
-            this.stopGuard();
+            this.stopGuard(true, true);
           } else {
             this.startGuard();
           }
         })
+      if (this.sessionReportTitle.length > 0 && !this.isGuarding && !this.isStartingGuard) {
+        this.SessionReportCard()
+      }
       this.PostureInsightCard()
       Row({ space: 10 }) {
         Button(this.isManualOperation ? '处理中' : '记录基线')
@@ -1726,6 +1887,66 @@ struct Index {
       .width('100%')
     }
     .width('100%')
+  }
+  @Builder
+  private SessionReportCard() {
+    Column({ space: 8 }) {
+      Row() {
+        Text(this.sessionReportTitle)
+          .fontSize(18)
+          .fontWeight(FontWeight.Bold)
+          .fontColor(INK)
+        Blank()
+        if (this.sessionReportScore > 0) {
+          Text(this.sessionReportScore.toString())
+            .width(46)
+            .height(30)
+            .fontSize(16)
+            .fontWeight(FontWeight.Bold)
+            .fontColor('#FFFFFF')
+            .textAlign(TextAlign.Center)
+            .lineHeight(30)
+            .backgroundColor(scoreColor(this.sessionReportScore))
+            .borderRadius(8)
+        }
+      }
+      .width('100%')
+      Text(this.sessionReportMeta)
+        .fontSize(13)
+        .fontColor(MUTED)
+        .width('100%')
+      Text(this.sessionReportSummary)
+        .fontSize(14)
+        .fontWeight(FontWeight.Bold)
+        .fontColor(INK)
+        .lineHeight(20)
+        .maxLines(2)
+        .width('100%')
+      Row({ space: 8 }) {
+        Text('建议')
+          .width(42)
+          .height(24)
+          .fontSize(12)
+          .fontWeight(FontWeight.Bold)
+          .fontColor(GREEN)
+          .textAlign(TextAlign.Center)
+          .lineHeight(24)
+          .backgroundColor(GREEN_SOFT)
+          .borderRadius(8)
+        Text(this.sessionReportAdvice)
+          .fontSize(14)
+          .fontColor(MUTED)
+          .lineHeight(20)
+          .maxLines(2)
+          .layoutWeight(1)
+      }
+      .width('100%')
+    }
+    .width('100%')
+    .padding(14)
+    .backgroundColor(SURFACE)
+    .borderRadius(8)
+    .border({ width: 1, color: LINE })
   }
   @Builder
   private PostureInsightCard() {
