@@ -856,18 +856,27 @@ struct Index {
     }
   }
   private togglePrivacy(): void {
+    if (this.controlsLocked()) {
+      return;
+    }
     const next = this.copySettings(this.settings);
     next.privacyMode = !next.privacyMode;
     this.settings = next;
     this.persistData();
   }
   private toggleSound(): void {
+    if (this.controlsLocked()) {
+      return;
+    }
     const next = this.copySettings(this.settings);
     next.gentleSound = !next.gentleSound;
     this.settings = next;
     this.persistData();
   }
   private toggleVibration(): void {
+    if (this.controlsLocked()) {
+      return;
+    }
     const next = this.copySettings(this.settings);
     next.vibration = !next.vibration;
     this.settings = next;
@@ -2572,6 +2581,7 @@ struct Index {
         .fontColor(this.settings.privacyMode ? '#FFFFFF' : MUTED)
         .backgroundColor(this.settings.privacyMode ? GREEN : '#E6EBE4')
         .borderRadius(8)
+        .opacity(this.actionOpacity())
         .onClick(() => {
           this.togglePrivacy();
         })
@@ -2598,6 +2608,7 @@ struct Index {
         .fontColor(this.settings.gentleSound ? '#FFFFFF' : MUTED)
         .backgroundColor(this.settings.gentleSound ? GREEN : '#E6EBE4')
         .borderRadius(8)
+        .opacity(this.actionOpacity())
         .onClick(() => {
           this.toggleSound();
         })
@@ -2624,6 +2635,7 @@ struct Index {
         .fontColor(this.settings.vibration ? '#FFFFFF' : MUTED)
         .backgroundColor(this.settings.vibration ? GREEN : '#E6EBE4')
         .borderRadius(8)
+        .opacity(this.actionOpacity())
         .onClick(() => {
           this.toggleVibration();
         })
