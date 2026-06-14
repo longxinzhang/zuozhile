@@ -1848,6 +1848,12 @@ struct Index {
   private guardButtonColor(): string {
     return (this.isGuarding || this.isStoppingGuard) ? RED : GREEN;
   }
+  private switchTab(index: number): void {
+    if (this.controlsLocked()) {
+      return;
+    }
+    this.activeTab = index;
+  }
   private primaryPostureAlert(): PostureAlertType {
     if (this.sitLevel === PostureLevel.BAD) {
       return this.sitAlertType();
@@ -2664,8 +2670,9 @@ struct Index {
           .fontColor(this.activeTab === item.index ? '#FFFFFF' : MUTED)
           .backgroundColor(this.activeTab === item.index ? INK : '#EEF2EA')
           .borderRadius(8)
+          .opacity(this.actionOpacity())
           .onClick(() => {
-            this.activeTab = item.index;
+            this.switchTab(item.index);
           })
       }, (item: TabItem) => item.label)
     }
