@@ -280,8 +280,8 @@ export class CoreVisionPostureSource implements PostureSource {
       this.markStage('调用 PhotoOutput.capture');
       await this.photoOutput.capture();
     } catch (error) {
-      this.rejectPending('拍照请求失败');
-      throw new Error(errorSummary(error as Error));
+      this.clearPending();
+      throw new Error('拍照请求失败：' + errorSummary(error as Error));
     }
     this.markStage('等待 photoAvailable 回调');
     return await waitPhoto;
