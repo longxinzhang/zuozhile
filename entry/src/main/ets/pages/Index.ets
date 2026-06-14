@@ -218,30 +218,9 @@ struct Index {
     this.guardRunId += 1;
     const runId = this.guardRunId;
     try {
-      if (this.settings.useCoreVision) {
-        if (this.cameraPreviewSurfaceId.length === 0) {
-          this.summary = '预览未就绪';
-          this.reminderText = '预览 surface 未创建';
-          this.sourceDetail = '真实相机需要预览 surface 后才能拍照抽帧';
-          return;
-        }
-        const permissionGranted = await this.ensureCameraPermission();
-        if (!permissionGranted) {
-          this.summary = '需要相机权限';
-          this.reminderText = '权限未授权';
-          return;
-        }
-        const cameraReady = this.probeCamera();
-        if (!cameraReady) {
-          this.summary = '相机不可用';
-          this.reminderText = '相机预检失败';
-          return;
-        }
-      } else {
-        this.permissionText = '模拟采样无需相机权限';
-        this.cameraProbeText = '模拟采样未占用相机';
-        this.isCameraPermissionGranted = false;
-        this.isCameraProbeAvailable = false;
+      const sourceReady = await this.prepareSourceAccess();
+      if (!sourceReady) {
+        return;
       }
       await this.rebuildPostureSource();
       if (runId !== this.guardRunId) {
@@ -292,6 +271,35 @@ struct Index {
     await this.guardWindow.leave(this.abilityContext());
     this.guardWindowText = this.guardWindow.statusDetail();
     this.syncSourceStatus();
+  }
+  private async prepareSourceAccess(): Promise<boolean> {
+    if (!this.settings.useCoreVision) {
+      this.permissionText = '模拟采样无需相机权限';
+      this.cameraProbeText = '模拟采样未占用相机';
+      this.isCameraPermissionGranted = false;
+      this.isCameraProbeAvailable = false;
+      return true;
+    }
+
+    if (this.cameraPreviewSurfaceId.length === 0) {
+      this.summary = '预览未就绪';
+      this.reminderText = '预览 surface 未创建';
+      this.sourceDetail = '真实相机需要预览 surface 后才能拍照抽帧';
+      return false;
+    }
+    const permissionGranted = await this.ensureCameraPermission();
+    if (!permissionGranted) {
+      this.summary = '需要相机权限';
+      this.reminderText = '权限未授权';
+      return false;
+    }
+    const cameraReady = this.probeCamera();
+    if (!cameraReady) {
+      this.summary = '相机不可用';
+      this.reminderText = '相机预检失败';
+      return false;
+    }
+    return true;
   }
   private async ensureCameraPermission(): Promise<boolean> {
     const context = this.abilityContext();
@@ -546,24 +554,9 @@ struct Index {
     if (this.isGuarding) {
       await this.stopGuard();
     }
-    if (this.settings.useCoreVision) {
-      if (this.cameraPreviewSurfaceId.length === 0) {
-        this.summary = '预览未就绪';
-        this.reminderText = '预览 surface 未创建';
-        return;
-      }
-      const permissionGranted = await this.ensureCameraPermission();
-      if (!permissionGranted) {
-        this.summary = '需要相机权限';
-        this.reminderText = '权限未授权';
-        return;
-      }
-      const cameraReady = this.probeCamera();
-      if (!cameraReady) {
-        this.summary = '相机不可用';
-        this.reminderText = '相机预检失败';
-        return;
-      }
+    const sourceReady = await this.prepareSourceAccess();
+    if (!sourceReady) {
+      return;
     }
 
     this.isSampling = true;
@@ -590,6 +583,9 @@ struct Index {
       this.settings = next;
       this.summary = '已记录当前基线';
       this.lastSampleText = this.formatClock(next.profile.calibratedAt);
+      this.reminder.reset();
+      this.resetDisplayStability();
+      this.resetReminderState('暂无提醒');
       this.persistData();
     } catch (error) {
       this.summary = '校准失败';
@@ -619,6 +615,9 @@ struct Index {
     next.profile.calibratedAt = defaults.profile.calibratedAt;
     this.settings = next;
     this.summary = '已恢复默认基线';
+    this.reminder.reset();
+    this.resetDisplayStability();
+    this.resetReminderState('暂无提醒');
     this.persistData();
   }
   private setSensitivity(value: number): void {
@@ -633,12 +632,11 @@ struct Index {
   private async setIntervalMs(value: number): Promise<void> {
     const next = this.copySettings(this.settings);
     next.profile.sampleIntervalMs = value;
-      this.settings = next;
-      if (this.isGuarding) {
-        await this.stopGuard();
-        await this.startGuard();
-    } else {
-      this.persistData();
+    this.settings = next;
+    this.persistData();
+    if (this.isGuarding) {
+      await this.stopGuard();
+      await this.startGuard();
     }
   }
   private async toggleCoreVision(): Promise<void> {
@@ -710,6 +708,10 @@ struct Index {
   private async sampleOnce(): Promise<void> {
     if (this.isGuarding) {
       await this.captureFrame(true);
+      return;
+    }
+    const sourceReady = await this.prepareSourceAccess();
+    if (!sourceReady) {
       return;
     }
     await this.rebuildPostureSource();

@@ -4,7 +4,7 @@ HarmonyOS NEXT / ArkTS 姿态守护应用 MVP。
 
 ## 当前实现
 
-- 守护页：开始/结束守护、周期抽帧状态、三项指标、识别姿势图与建议、基线校准、前台轻提醒/强提醒。
+- 守护页：开始/结束守护、周期抽帧状态、三项指标、识别姿势图与建议、基线校准、单次抽样、前台轻提醒/强提醒。
 - 统计页：今日均分、端正时长、提醒次数、今日问题分布、最近时段分布、最近记录。
 - 指南页：展示 `assets/posture` 的 12 组错误/正确姿势对比图。
 - 设置页：标准/灵敏两档灵敏度、抽帧间隔、真实/模拟检测切换、本机隐私模式、提示音、振动、本地数据确认清空。
@@ -15,6 +15,7 @@ HarmonyOS NEXT / ArkTS 姿态守护应用 MVP。
 - 校准：`记录基线` 会采集 10 帧，按字段取中位数，保存 pitch/roll/yaw、人脸框、肩宽、鼻肩比和嘴部比例。
 - 检测层：已提供 `PostureSource` 抽象、`MockPostureSource`、`CoreVisionPostureSource`、`CoreVisionPostureDetector`。
 - 相机层：已提供 `CameraProbeService`，开始守护时会查询摄像头、前置摄像头和预览/拍照能力；真实检测使用隐藏 `XComponent` 预览 surface + `PhotoOutput.capture()` 抽帧。
+- 相机准备：开始守护、记录基线和单次抽样共用同一套权限申请、预览 surface 检查和相机预检流程。
 - 守护模式：开始守护时设置窗口常亮并压低窗口亮度，结束守护时恢复。
 - 权限：开始守护前会动态申请 `ohos.permission.CAMERA`。
 - 存储：Preferences 本机保存设置和会话记录。
