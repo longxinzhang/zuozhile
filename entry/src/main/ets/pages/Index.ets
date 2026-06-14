@@ -1644,9 +1644,9 @@ struct Index {
         .fontSize(18)
         .fontWeight(FontWeight.Bold)
         .fontColor('#FFFFFF')
-        .backgroundColor(this.isGuarding ? RED : GREEN)
+        .backgroundColor(this.guardButtonColor())
         .borderRadius(8)
-        .opacity(this.isManualOperation ? 0.55 : 1)
+        .opacity(this.actionOpacity())
         .onClick(() => {
           if (this.controlsLocked()) {
             return;
@@ -1840,7 +1840,13 @@ struct Index {
     if (this.isStartingGuard) {
       return '启动中';
     }
+    if (this.isStoppingGuard) {
+      return '停止中';
+    }
     return this.isGuarding ? '结束守护' : '开始守护';
+  }
+  private guardButtonColor(): string {
+    return (this.isGuarding || this.isStoppingGuard) ? RED : GREEN;
   }
   private primaryPostureAlert(): PostureAlertType {
     if (this.sitLevel === PostureLevel.BAD) {
