@@ -683,8 +683,11 @@ struct Index {
     this.showCoreVisionConfirm = false;
     await this.toggleCoreVision();
   }
+  private isSensitivitySelected(value: number): boolean {
+    return Math.abs(value - this.settings.profile.sensitivity) < 0.01;
+  }
   private setSensitivity(value: number): void {
-    if (this.controlsLocked() || this.isSampling) {
+    if (this.controlsLocked() || this.isSampling || this.isSensitivitySelected(value)) {
       return;
     }
     const next = this.copySettings(this.settings);
@@ -696,7 +699,7 @@ struct Index {
     this.persistData();
   }
   private async setIntervalMs(value: number): Promise<void> {
-    if (this.controlsLocked() || this.isSampling) {
+    if (this.controlsLocked() || this.isSampling || this.settings.profile.sampleIntervalMs === value) {
       return;
     }
     this.isManualOperation = true;
@@ -2340,18 +2343,18 @@ struct Index {
       Text(label)
         .fontSize(14)
         .fontWeight(FontWeight.Bold)
-        .fontColor(Math.abs(value - this.settings.profile.sensitivity) < 0.01 ? '#FFFFFF' : INK)
+        .fontColor(this.isSensitivitySelected(value) ? '#FFFFFF' : INK)
       Blank()
-      Text(Math.abs(value - this.settings.profile.sensitivity) < 0.01 ? '已选' : '选择')
+      Text(this.isSensitivitySelected(value) ? '已选' : '选择')
         .fontSize(12)
-        .fontColor(Math.abs(value - this.settings.profile.sensitivity) < 0.01 ? '#FFFFFF' : MUTED)
+        .fontColor(this.isSensitivitySelected(value) ? '#FFFFFF' : MUTED)
     }
       .height(48)
       .layoutWeight(1)
       .padding({ left: 14, right: 14 })
-      .backgroundColor(Math.abs(value - this.settings.profile.sensitivity) < 0.01 ? BLUE : '#F9FAF7')
+      .backgroundColor(this.isSensitivitySelected(value) ? BLUE : '#F9FAF7')
       .borderRadius(8)
-      .border({ width: 1, color: Math.abs(value - this.settings.profile.sensitivity) < 0.01 ? BLUE : LINE })
+      .border({ width: 1, color: this.isSensitivitySelected(value) ? BLUE : LINE })
       .opacity(this.actionOpacity())
       .onClick(() => {
         this.setSensitivity(value);
