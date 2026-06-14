@@ -118,6 +118,7 @@ struct Index {
   @State private reminderAlertType: PostureAlertType = PostureAlertType.NONE;
   @State private reminderMessage: string = '';
   @State private showHardReminder: boolean = false;
+  @State private showClearDataConfirm: boolean = false;
   @State private lastSampleText: string = '尚未采样';
   @State private sourceLabel: string = '真实相机检测';
   @State private sourceDetail: string = '真实相机待启动';
@@ -680,6 +681,7 @@ struct Index {
     this.persistData();
   }
   private async clearData(): Promise<void> {
+    this.showClearDataConfirm = false;
     await this.stopGuard();
     const context = this.abilityContext();
     if (context) {
@@ -695,6 +697,15 @@ struct Index {
     this.resetReminderState('暂无提醒');
     this.lastSampleText = '尚未采样';
     await this.rebuildPostureSource();
+  }
+  private requestClearData(): void {
+    this.showClearDataConfirm = true;
+  }
+  private dismissClearDataConfirm(): void {
+    this.showClearDataConfirm = false;
+  }
+  private async confirmClearData(): Promise<void> {
+    await this.clearData();
   }
   private async sampleOnce(): Promise<void> {
     if (this.isGuarding) {
@@ -843,6 +854,9 @@ struct Index {
         this.TabBar()
         if (this.showHardReminder) {
           this.HardReminderOverlay()
+        }
+        if (this.showClearDataConfirm) {
+          this.ClearDataConfirmOverlay()
         }
       }
       .width('100%')
@@ -1062,6 +1076,61 @@ struct Index {
     .height(128)
     .backgroundColor(background)
     .borderRadius(8)
+  }
+  @Builder
+  private ClearDataConfirmOverlay() {
+    Column() {
+      Column({ space: 16 }) {
+        Text('清空本机数据？')
+          .fontSize(22)
+          .fontWeight(FontWeight.Bold)
+          .fontColor(INK)
+        Text('会删除统计记录并恢复默认设置。')
+          .fontSize(15)
+          .fontColor(MUTED)
+          .textAlign(TextAlign.Center)
+          .lineHeight(22)
+          .maxLines(2)
+        Row({ space: 10 }) {
+          Button('取消')
+            .height(44)
+            .layoutWeight(1)
+            .fontSize(15)
+            .fontWeight(FontWeight.Bold)
+            .fontColor(INK)
+            .backgroundColor('#F9FAF7')
+            .borderRadius(8)
+            .border({ width: 1, color: LINE })
+            .onClick(() => {
+              this.dismissClearDataConfirm();
+            })
+          Button('清空')
+            .height(44)
+            .layoutWeight(1)
+            .fontSize(15)
+            .fontWeight(FontWeight.Bold)
+            .fontColor('#FFFFFF')
+            .backgroundColor(RED)
+            .borderRadius(8)
+            .onClick(() => {
+              this.confirmClearData();
+            })
+        }
+        .width('100%')
+      }
+      .width('82%')
+      .padding(22)
+      .alignItems(HorizontalAlign.Center)
+      .backgroundColor(SURFACE)
+      .borderRadius(8)
+      .shadow({ radius: 18, color: '#33000000', offsetY: 8 })
+    }
+    .width('100%')
+    .height('100%')
+    .justifyContent(FlexAlign.Center)
+    .alignItems(HorizontalAlign.Center)
+    .backgroundColor('#CC171B1A')
+    .zIndex(11)
   }
   @Builder
   private MetricGrid() {
@@ -1854,7 +1923,7 @@ struct Index {
         .borderRadius(8)
         .border({ width: 1, color: '#F0C9C5' })
         .onClick(() => {
-          this.clearData();
+          this.requestClearData();
         })
     }
     .width('100%')
