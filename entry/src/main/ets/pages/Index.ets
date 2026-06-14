@@ -1856,6 +1856,9 @@ struct Index {
     this.activeTab = index;
   }
   private primaryPostureAlert(): PostureAlertType {
+    if (this.reminderAction !== ReminderAction.NONE && this.reminderAlertType !== PostureAlertType.NONE) {
+      return this.reminderAlertType;
+    }
     if (this.sitLevel === PostureLevel.BAD) {
       return this.sitAlertType();
     }
