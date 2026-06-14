@@ -220,8 +220,8 @@ struct Index {
   private actionOpacity(): number {
     return this.controlsLocked() ? 0.55 : 1;
   }
-  private async startGuard(): Promise<void> {
-    if (this.isGuarding || this.controlsLocked()) {
+  private async startGuard(ignoreOperationLock: boolean = false): Promise<void> {
+    if (this.isGuarding || (!ignoreOperationLock && this.controlsLocked())) {
       return;
     }
     this.isStartingGuard = true;
@@ -699,13 +699,19 @@ struct Index {
     if (this.controlsLocked() || this.isSampling) {
       return;
     }
-    const next = this.copySettings(this.settings);
-    next.profile.sampleIntervalMs = value;
-    this.settings = next;
-    this.persistData();
-    if (this.isGuarding) {
-      await this.stopGuard();
-      await this.startGuard();
+    this.isManualOperation = true;
+    try {
+      const shouldRestart = this.isGuarding;
+      const next = this.copySettings(this.settings);
+      next.profile.sampleIntervalMs = value;
+      this.settings = next;
+      this.persistData();
+      if (shouldRestart) {
+        await this.stopGuard();
+        await this.startGuard(true);
+      }
+    } finally {
+      this.isManualOperation = false;
     }
   }
   private async toggleCoreVision(): Promise<void> {
