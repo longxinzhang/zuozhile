@@ -119,6 +119,7 @@ struct Index {
   @State private reminderMessage: string = '';
   @State private showHardReminder: boolean = false;
   @State private showClearDataConfirm: boolean = false;
+  @State private showResetCalibrationConfirm: boolean = false;
   @State private lastSampleText: string = '尚未采样';
   @State private sourceLabel: string = '真实相机检测';
   @State private sourceDetail: string = '真实相机待启动';
@@ -598,6 +599,7 @@ struct Index {
     }
   }
   private resetCalibration(): void {
+    this.showResetCalibrationConfirm = false;
     const defaults = createDefaultSettings();
     const next = this.copySettings(this.settings);
     next.profile.neutralNeckAngle = defaults.profile.neutralNeckAngle;
@@ -619,6 +621,15 @@ struct Index {
     this.resetDisplayStability();
     this.resetReminderState('暂无提醒');
     this.persistData();
+  }
+  private requestResetCalibration(): void {
+    this.showResetCalibrationConfirm = true;
+  }
+  private dismissResetCalibrationConfirm(): void {
+    this.showResetCalibrationConfirm = false;
+  }
+  private confirmResetCalibration(): void {
+    this.resetCalibration();
   }
   private setSensitivity(value: number): void {
     const next = this.copySettings(this.settings);
@@ -935,6 +946,9 @@ struct Index {
         if (this.showClearDataConfirm) {
           this.ClearDataConfirmOverlay()
         }
+        if (this.showResetCalibrationConfirm) {
+          this.ResetCalibrationConfirmOverlay()
+        }
       }
       .width('100%')
       .height('100%')
@@ -1191,6 +1205,61 @@ struct Index {
             .borderRadius(8)
             .onClick(() => {
               this.confirmClearData();
+            })
+        }
+        .width('100%')
+      }
+      .width('82%')
+      .padding(22)
+      .alignItems(HorizontalAlign.Center)
+      .backgroundColor(SURFACE)
+      .borderRadius(8)
+      .shadow({ radius: 18, color: '#33000000', offsetY: 8 })
+    }
+    .width('100%')
+    .height('100%')
+    .justifyContent(FlexAlign.Center)
+    .alignItems(HorizontalAlign.Center)
+    .backgroundColor('#CC171B1A')
+    .zIndex(11)
+  }
+  @Builder
+  private ResetCalibrationConfirmOverlay() {
+    Column() {
+      Column({ space: 16 }) {
+        Text('恢复默认基线？')
+          .fontSize(22)
+          .fontWeight(FontWeight.Bold)
+          .fontColor(INK)
+        Text('会清除当前个人校准值，后续识别将使用默认基线。')
+          .fontSize(15)
+          .fontColor(MUTED)
+          .textAlign(TextAlign.Center)
+          .lineHeight(22)
+          .maxLines(2)
+        Row({ space: 10 }) {
+          Button('取消')
+            .height(44)
+            .layoutWeight(1)
+            .fontSize(15)
+            .fontWeight(FontWeight.Bold)
+            .fontColor(INK)
+            .backgroundColor('#F9FAF7')
+            .borderRadius(8)
+            .border({ width: 1, color: LINE })
+            .onClick(() => {
+              this.dismissResetCalibrationConfirm();
+            })
+          Button('恢复')
+            .height(44)
+            .layoutWeight(1)
+            .fontSize(15)
+            .fontWeight(FontWeight.Bold)
+            .fontColor('#FFFFFF')
+            .backgroundColor(RED)
+            .borderRadius(8)
+            .onClick(() => {
+              this.confirmResetCalibration();
             })
         }
         .width('100%')
@@ -2043,7 +2112,7 @@ struct Index {
           .borderRadius(8)
           .border({ width: 1, color: LINE })
           .onClick(() => {
-            this.resetCalibration();
+            this.requestResetCalibration();
           })
       }
       .width('100%')
