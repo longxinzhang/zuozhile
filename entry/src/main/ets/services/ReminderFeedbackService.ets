@@ -20,6 +20,7 @@ export class ReminderFeedbackService {
 
     const duration = action === ReminderAction.HARD ? HARD_VIBRATION_MS : SOFT_VIBRATION_MS;
     try {
+      await ReminderFeedbackService.stop();
       await vibrator.startVibration({
         type: 'time',
         duration
