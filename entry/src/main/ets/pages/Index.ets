@@ -342,6 +342,23 @@ struct Index {
     }
     return result.available;
   }
+  private syncAccessStatusForSource(): void {
+    if (!this.settings.useCoreVision) {
+      this.permissionText = '模拟采样无需相机权限';
+      this.cameraProbeText = '模拟采样未占用相机';
+      this.isCameraPermissionGranted = false;
+      this.isCameraProbeAvailable = false;
+      return;
+    }
+    if (this.permissionText === '模拟采样无需相机权限') {
+      this.permissionText = '相机权限待授权';
+      this.isCameraPermissionGranted = false;
+    }
+    if (this.cameraProbeText === '模拟采样未占用相机') {
+      this.cameraProbeText = '相机能力待检测';
+      this.isCameraProbeAvailable = false;
+    }
+  }
   private async captureFrame(force: boolean = false): Promise<void> {
     if (!force && !this.isGuarding) {
       return;
@@ -758,8 +775,10 @@ struct Index {
     const status = this.postureSource.status();
     this.sourceLabel = status.label;
     this.sourceDetail = status.detail;
+    this.syncAccessStatusForSource();
   }
   private syncIdleSourceStatus(): void {
+    this.syncAccessStatusForSource();
     if (this.settings.useCoreVision) {
       this.sourceLabel = '真实相机检测';
       this.sourceDetail = this.cameraPreviewSurfaceId.length > 0 ? '预览 surface 已就绪' : '真实相机待启动';
@@ -789,6 +808,18 @@ struct Index {
       return '前置摄像头可用';
     }
     return '相机能力已就绪';
+  }
+  private previewSurfaceDisplayText(): string {
+    if (!this.settings.useCoreVision) {
+      return '模拟采样不创建预览';
+    }
+    return this.cameraPreviewSurfaceId.length > 0 ? '预览 surface 已就绪' : '预览 surface 待创建';
+  }
+  private previewSurfaceDisplayColor(): string {
+    if (!this.settings.useCoreVision || this.cameraPreviewSurfaceId.length > 0) {
+      return GREEN;
+    }
+    return YELLOW;
   }
   private sourceDisplayText(): string {
     if (this.settings.privacyMode) {
@@ -1543,10 +1574,10 @@ struct Index {
         .fontWeight(FontWeight.Bold)
         .fontColor(this.isCameraProbeAvailable ? GREEN : YELLOW)
         .lineHeight(19)
-      Text(this.cameraPreviewSurfaceId.length > 0 ? '预览 surface 已就绪' : '预览 surface 待创建')
+      Text(this.previewSurfaceDisplayText())
         .fontSize(13)
         .fontWeight(FontWeight.Bold)
-        .fontColor(this.cameraPreviewSurfaceId.length > 0 ? GREEN : YELLOW)
+        .fontColor(this.previewSurfaceDisplayColor())
         .lineHeight(19)
       Text(this.guardWindowText)
         .fontSize(13)
