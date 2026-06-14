@@ -126,6 +126,7 @@ struct Index {
   @State private showCoreVisionConfirm: boolean = false;
   @State private calibrationProgressText: string = '';
   @State private isCalibrationProgressHealthy: boolean = true;
+  @State private calibrationProgressPercent: number = -1;
   @State private lastSampleText: string = '尚未采样';
   @State private sourceLabel: string = '真实相机检测';
   @State private sourceDetail: string = '真实相机待启动';
@@ -676,7 +677,7 @@ struct Index {
         return;
       }
       if (!sourceReady) {
-        this.setCalibrationProgress(this.reminderText, false);
+        this.setCalibrationProgress(this.reminderText, false, -1);
         return;
       }
 
@@ -685,7 +686,7 @@ struct Index {
         const text = second.toString() + '秒后开始校准，请摆好健康姿势';
         this.summary = text;
         this.reminderText = '准备记录健康坐姿基线';
-        this.setCalibrationProgress(text);
+        this.setCalibrationProgress(text, true, 0);
         await this.sleep(CALIBRATION_COUNTDOWN_DELAY_MS);
         if (!this.isCurrentPageRun(pageRunId)) {
           return;
@@ -697,9 +698,10 @@ struct Index {
       }
       for (let index = 0; index < CALIBRATION_FRAME_COUNT; index += 1) {
         const text = '开始校准，别乱动哦，' + (index + 1).toString() + '/' + CALIBRATION_FRAME_COUNT.toString();
+        const percent = Math.round((index + 1) * 100 / CALIBRATION_FRAME_COUNT);
         this.summary = text;
         this.reminderText = '正在记录健康坐姿基线';
-        this.setCalibrationProgress(text);
+        this.setCalibrationProgress(text, true, percent);
         const sample = await this.postureSource.sample(this.settings.profile);
         if (!this.isCurrentPageRun(pageRunId)) {
           return;
@@ -718,7 +720,7 @@ struct Index {
       if (!quality.isUsable) {
         this.summary = '校准失败';
         this.reminderText = quality.detail;
-        this.setCalibrationProgress(quality.detail, false);
+        this.setCalibrationProgress(quality.detail, false, 100);
         return;
       }
       next.profile = buildCalibrationProfile(samples, this.settings.profile);
@@ -728,7 +730,7 @@ struct Index {
       this.reminder.reset();
       this.resetDisplayStability();
       this.resetReminderState('暂无提醒');
-      this.setCalibrationProgress('校准完成，已记录当前基线');
+      this.setCalibrationProgress('校准完成，已记录当前基线', true, 100);
       this.persistData();
     } catch (error) {
       if (!this.isCurrentPageRun(pageRunId)) {
@@ -736,7 +738,7 @@ struct Index {
       }
       this.summary = '校准失败';
       this.reminderText = '请确认人脸和上半身在画面内';
-      this.setCalibrationProgress('请确认人脸和上半身在画面内', false);
+      this.setCalibrationProgress('请确认人脸和上半身在画面内', false, -1);
     } finally {
       if (this.isSampling) {
         await this.postureSource.dispose();
@@ -771,7 +773,7 @@ struct Index {
     next.profile.calibratedAt = defaults.profile.calibratedAt;
     this.settings = next;
     this.summary = '已恢复默认基线';
-    this.setCalibrationProgress('已恢复默认基线');
+    this.setCalibrationProgress('已恢复默认基线', true, -1);
     this.reminder.reset();
     this.resetDisplayStability();
     this.resetReminderState('暂无提醒');
@@ -1059,9 +1061,23 @@ struct Index {
     this.reminderAlertType = PostureAlertType.NONE;
     this.reminderMessage = '';
   }
-  private setCalibrationProgress(text: string, isHealthy: boolean = true): void {
+  private setCalibrationProgress(text: string, isHealthy: boolean = true, percent: number = -1): void {
     this.calibrationProgressText = text;
     this.isCalibrationProgressHealthy = isHealthy;
+    if (!Number.isFinite(percent) || percent < 0) {
+      this.calibrationProgressPercent = -1;
+      return;
+    }
+    this.calibrationProgressPercent = Math.max(0, Math.min(100, Math.round(percent)));
+  }
+  private calibrationProgressColor(): string {
+    return this.isCalibrationProgressHealthy ? BLUE : RED;
+  }
+  private calibrationProgressSoftColor(): string {
+    return this.isCalibrationProgressHealthy ? '#EAF1FF' : RED_SOFT;
+  }
+  private calibrationProgressPercentText(): string {
+    return this.calibrationProgressPercent.toString() + '%';
   }
   private cancelHardReminderTimer(): void {
     if (this.hardReminderTimer >= 0) {
@@ -2451,15 +2467,48 @@ struct Index {
         .fontColor(MUTED)
         .width('100%')
       if (this.calibrationProgressText.length > 0) {
-        Text(this.calibrationProgressText)
-          .fontSize(14)
-          .fontWeight(FontWeight.Bold)
-          .fontColor(this.isCalibrationProgressHealthy ? BLUE : RED)
-          .lineHeight(20)
-          .maxLines(2)
+        Column({ space: 8 }) {
+          Row({ space: 8 }) {
+            Text(this.calibrationProgressText)
+              .fontSize(14)
+              .fontWeight(FontWeight.Bold)
+              .fontColor(this.calibrationProgressColor())
+              .lineHeight(20)
+              .maxLines(2)
+              .layoutWeight(1)
+            if (this.calibrationProgressPercent >= 0) {
+              Text(this.calibrationProgressPercentText())
+                .width(48)
+                .height(24)
+                .fontSize(12)
+                .fontWeight(FontWeight.Bold)
+                .fontColor(this.calibrationProgressColor())
+                .textAlign(TextAlign.Center)
+                .lineHeight(24)
+                .backgroundColor('#FFFFFF')
+                .borderRadius(8)
+            }
+          }
+          .width('100%')
+          if (this.calibrationProgressPercent >= 0) {
+            Row() {
+              if (this.calibrationProgressPercent > 0) {
+                Text('')
+                  .height(8)
+                  .width(this.calibrationProgressPercent.toString() + '%')
+                  .backgroundColor(this.calibrationProgressColor())
+                  .borderRadius(4)
+              }
+            }
+            .width('100%')
+            .height(8)
+            .backgroundColor('#DDE8F8')
+            .borderRadius(4)
+          }
+        }
           .width('100%')
           .padding({ left: 10, right: 10, top: 8, bottom: 8 })
-          .backgroundColor(this.isCalibrationProgressHealthy ? '#EAF1FF' : RED_SOFT)
+          .backgroundColor(this.calibrationProgressSoftColor())
           .borderRadius(8)
       }
       Row({ space: 10 }) {
