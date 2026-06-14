@@ -1,7 +1,7 @@
 import { abilityAccessCtrl, common, Permissions } from '@kit.AbilityKit';
 import { buildCalibrationProfile } from '../models/PostureCalibration';
 import { evaluatePosture } from '../models/PostureEvaluator';
-import { ReminderEngine, actionLabel } from '../models/ReminderEngine';
+import { ReminderEngine, actionLabel, alertTypeSubtitle, alertTypeTitle } from '../models/ReminderEngine';
 import { HourBucket, buildRecentBuckets, computeTodayStats } from '../models/SessionStats';
 import {
   AppData,
@@ -52,6 +52,12 @@ interface TabItem {
   label: string;
 }
 
+interface PostureGuideItem {
+  id: number;
+  title: string;
+  subtitle: string;
+}
+
 enum DisplayMetricType {
   SIT = 'sit',
   CHIN = 'chin',
@@ -61,7 +67,22 @@ enum DisplayMetricType {
 const TABS: TabItem[] = [
   { index: 0, label: '守护' },
   { index: 1, label: '统计' },
-  { index: 2, label: '设置' }
+  { index: 2, label: '指南' },
+  { index: 3, label: '设置' }
+];
+const GUIDE_ITEMS: PostureGuideItem[] = [
+  { id: 1, title: '挺起来一点～', subtitle: '驼背了，背轻轻靠回椅背' },
+  { id: 2, title: '坐正一点～', subtitle: '身体别歪向一侧，重心放中间' },
+  { id: 3, title: '抬头一点～', subtitle: '视线太低了，让屏幕和眼睛齐平' },
+  { id: 4, title: '肩膀放松～', subtitle: '别耸肩，双肩自然下沉' },
+  { id: 5, title: '下巴收一点～', subtitle: '别把脖子探出去' },
+  { id: 6, title: '头别歪～', subtitle: '头部尽量保持居中' },
+  { id: 7, title: '靠回椅背～', subtitle: '腰背需要更多支撑' },
+  { id: 8, title: '双脚踩稳～', subtitle: '双脚尽量平放地面' },
+  { id: 9, title: '手臂放松～', subtitle: '手肘自然弯曲，不要太紧' },
+  { id: 10, title: '屏幕抬高一点～', subtitle: '别总低头看屏幕' },
+  { id: 11, title: '嘴巴轻合～', subtitle: '长时间张嘴要稍微放松闭合' },
+  { id: 12, title: '呼吸一下～', subtitle: '坐久了，放松身体深呼吸' }
 ];
 const CAMERA_PERMISSION: Permissions = 'ohos.permission.CAMERA';
 const CALIBRATION_FRAME_COUNT = 10;
@@ -97,8 +118,8 @@ struct Index {
   @State private reminderMessage: string = '';
   @State private showHardReminder: boolean = false;
   @State private lastSampleText: string = '尚未采样';
-  @State private sourceLabel: string = '模拟采样';
-  @State private sourceDetail: string = '用于验证 UI、评分和提醒流程';
+  @State private sourceLabel: string = '真实相机检测';
+  @State private sourceDetail: string = '真实相机待启动';
   @State private permissionText: string = '相机权限待授权';
   @State private isCameraPermissionGranted: boolean = false;
   @State private cameraProbeText: string = '相机能力待检测';
@@ -148,6 +169,7 @@ struct Index {
   private applyData(data: AppData): void {
     this.settings = this.copySettings(data.settings);
     this.records = data.records.slice();
+    this.syncIdleSourceStatus();
   }
   private copySettings(settings: UserSettings): UserSettings {
     return {
@@ -445,7 +467,7 @@ struct Index {
       this.metricKey(result.chin.level, result.chin.label, result.chin.alertType),
       result.chin.level,
       this.metricKey(this.chinLevel, this.chinLabel,
-        this.chinLevel === PostureLevel.GOOD ? PostureAlertType.NONE : PostureAlertType.HEAD_DROP),
+        this.chinLevel === PostureLevel.GOOD ? PostureAlertType.NONE : this.chinAlertType()),
       this.chinLevel
     );
     const useMouth = this.shouldAdoptMetric(
@@ -453,7 +475,7 @@ struct Index {
       this.metricKey(result.mouth.level, result.mouth.label, result.mouth.alertType),
       result.mouth.level,
       this.metricKey(this.mouthLevel, this.mouthLabel,
-        this.mouthLevel === PostureLevel.GOOD ? PostureAlertType.NONE : PostureAlertType.MOUTH_OPEN),
+        this.mouthLevel === PostureLevel.GOOD ? PostureAlertType.NONE : PostureAlertType.ITEM_11),
       this.mouthLevel
     );
     this.score = result.score;
@@ -700,6 +722,15 @@ struct Index {
     this.sourceLabel = status.label;
     this.sourceDetail = status.detail;
   }
+  private syncIdleSourceStatus(): void {
+    if (this.settings.useCoreVision) {
+      this.sourceLabel = '真实相机检测';
+      this.sourceDetail = this.cameraPreviewSurfaceId.length > 0 ? '预览 surface 已就绪' : '真实相机待启动';
+      return;
+    }
+    this.sourceLabel = '模拟采样';
+    this.sourceDetail = '用于验证 UI、评分和提醒流程';
+  }
   private resetReminderState(text: string): void {
     this.cancelHardReminderTimer();
     this.stopReminderFeedback();
@@ -738,22 +769,11 @@ struct Index {
     ReminderFeedbackService.stop();
   }
   private reminderCopy(action: ReminderAction, type: PostureAlertType): string {
-    if (type === PostureAlertType.BODY_SLIDE) {
-      return action === ReminderAction.HARD ? '已经持续往下滑了，坐直一下' : '你在往下滑了，坐直一下';
+    const copy = alertTypeSubtitle(type);
+    if (action === ReminderAction.HARD) {
+      return copy + '，现在调整一下。';
     }
-    if (type === PostureAlertType.HEAD_DROP) {
-      return action === ReminderAction.HARD ? '低头时间有点久，抬一下头' : '抬一下头，看看远处';
-    }
-    if (type === PostureAlertType.KYPHOSIS) {
-      return action === ReminderAction.HARD ? '身体持续靠前，坐回椅背' : '身体有点靠前，坐回椅背';
-    }
-    if (type === PostureAlertType.SHOULDER_TILT) {
-      return action === ReminderAction.HARD ? '身体歪斜持续了，调整左右平衡' : '身体有点歪，调整左右平衡';
-    }
-    if (type === PostureAlertType.MOUTH_OPEN) {
-      return action === ReminderAction.HARD ? '嘴巴张开有点久，放松闭合' : '嘴巴张开了，放松闭合';
-    }
-    return action === ReminderAction.HARD ? '姿态偏离有点久，坐直一下' : '姿态有点偏了，坐直一下';
+    return copy;
   }
   private todayStats(): TodayStats {
     return computeTodayStats(this.records, this.settings.profile.sampleIntervalMs);
@@ -831,6 +851,8 @@ struct Index {
           this.GuardPage()
         } else if (this.activeTab === 1) {
           this.StatsPage()
+        } else if (this.activeTab === 2) {
+          this.GuidePage()
         } else {
           this.SettingsPage()
         }
@@ -950,17 +972,18 @@ struct Index {
   @Builder
   private HardReminderOverlay() {
     Column() {
-      Column({ space: 16 }) {
-        Text('坐直了')
-          .fontSize(26)
+      Column({ space: 14 }) {
+        this.AlertImageRow(this.reminderAlertType)
+        Text(alertTypeTitle(this.reminderAlertType))
+          .fontSize(24)
           .fontWeight(FontWeight.Bold)
           .fontColor(INK)
-        Text(this.reminderMessage)
-          .fontSize(18)
+        Text(this.reminderMessage.length > 0 ? this.reminderMessage : alertTypeSubtitle(this.reminderAlertType))
+          .fontSize(15)
           .fontWeight(FontWeight.Bold)
-          .fontColor(INK)
+          .fontColor(MUTED)
           .textAlign(TextAlign.Center)
-          .lineHeight(26)
+          .lineHeight(22)
           .maxLines(3)
         Button('知道了')
           .height(46)
@@ -987,6 +1010,34 @@ struct Index {
     .alignItems(HorizontalAlign.Center)
     .backgroundColor('#CC171B1A')
     .zIndex(10)
+  }
+  @Builder
+  private AlertImageRow(type: PostureAlertType) {
+    Row({ space: 8 }) {
+      this.AlertImageBox(this.alertIncorrectResource(type), RED_SOFT)
+      Text('→')
+        .width(24)
+        .fontSize(22)
+        .fontWeight(FontWeight.Bold)
+        .fontColor('#EF563D')
+        .textAlign(TextAlign.Center)
+      this.AlertImageBox(this.alertCorrectResource(type), GREEN_SOFT)
+    }
+    .width('100%')
+    .height(128)
+  }
+  @Builder
+  private AlertImageBox(resource: Resource, background: string) {
+    Stack() {
+      Image(resource)
+        .width('92%')
+        .height('92%')
+        .objectFit(ImageFit.Contain)
+    }
+    .layoutWeight(1)
+    .height(128)
+    .backgroundColor(background)
+    .borderRadius(8)
   }
   @Builder
   private MetricGrid() {
@@ -1257,9 +1308,15 @@ struct Index {
       .opacity(0.01)
       .onLoad(() => {
         this.cameraPreviewSurfaceId = this.cameraPreviewController.getXComponentSurfaceId();
+        if (!this.isGuarding) {
+          this.syncIdleSourceStatus();
+        }
       })
       .onDestroy(() => {
         this.cameraPreviewSurfaceId = '';
+        if (!this.isGuarding) {
+          this.syncIdleSourceStatus();
+        }
       })
   }
   private guardButtonText(): string {
@@ -1273,74 +1330,100 @@ struct Index {
       return this.sitAlertType();
     }
     if (this.chinLevel === PostureLevel.BAD) {
-      return PostureAlertType.HEAD_DROP;
+      return this.chinAlertType();
     }
     if (this.mouthLevel === PostureLevel.BAD) {
-      return PostureAlertType.MOUTH_OPEN;
+      return PostureAlertType.ITEM_11;
     }
     if (this.sitLevel === PostureLevel.WARN) {
       return this.sitAlertType();
     }
     if (this.chinLevel === PostureLevel.WARN) {
-      return PostureAlertType.HEAD_DROP;
+      return this.chinAlertType();
     }
     if (this.mouthLevel === PostureLevel.WARN) {
-      return PostureAlertType.MOUTH_OPEN;
+      return PostureAlertType.ITEM_11;
     }
     return PostureAlertType.NONE;
   }
   private sitAlertType(): PostureAlertType {
-    if (this.sitLabel.indexOf('下滑') >= 0) {
-      return PostureAlertType.BODY_SLIDE;
+    if (this.sitLabel.indexOf('下滑') >= 0 || this.sitLabel.indexOf('靠前') >= 0 ||
+      this.sitLabel.indexOf('椅背') >= 0) {
+      return PostureAlertType.ITEM_07;
     }
     if (this.sitLabel.indexOf('含胸') >= 0 || this.sitLabel.indexOf('前扣') >= 0) {
-      return PostureAlertType.KYPHOSIS;
-    }
-    if (this.sitLabel.indexOf('靠前') >= 0) {
-      return PostureAlertType.KYPHOSIS;
+      return PostureAlertType.ITEM_01;
     }
     if (this.sitLabel.indexOf('歪') >= 0 || this.sitLabel.indexOf('不平') >= 0) {
-      return PostureAlertType.SHOULDER_TILT;
+      return this.sitLabel.indexOf('头') >= 0 ? PostureAlertType.ITEM_06 : PostureAlertType.ITEM_02;
     }
-    return this.sitLevel === PostureLevel.GOOD ? PostureAlertType.NONE : PostureAlertType.KYPHOSIS;
+    return this.sitLevel === PostureLevel.GOOD ? PostureAlertType.NONE : PostureAlertType.ITEM_01;
+  }
+  private chinAlertType(): PostureAlertType {
+    if (this.chinLabel.indexOf('前探') >= 0 || this.chinLabel.indexOf('下巴') >= 0) {
+      return PostureAlertType.ITEM_05;
+    }
+    return this.chinLevel === PostureLevel.GOOD ? PostureAlertType.NONE : PostureAlertType.ITEM_03;
   }
   private postureInsightTitle(): string {
     const alert = this.primaryPostureAlert();
-    if (alert === PostureAlertType.BODY_SLIDE) {
-      return '身体有点下滑';
+    if (alert === PostureAlertType.ITEM_01) {
+      return '含胸趋势';
     }
-    if (alert === PostureAlertType.HEAD_DROP) {
-      return '低头趋势';
-    }
-    if (alert === PostureAlertType.KYPHOSIS) {
-      return this.sitLabel.indexOf('靠前') >= 0 ? '身体靠近屏幕' : '肩膀前扣';
-    }
-    if (alert === PostureAlertType.SHOULDER_TILT) {
+    if (alert === PostureAlertType.ITEM_02) {
       return '左右不平';
     }
-    if (alert === PostureAlertType.MOUTH_OPEN) {
+    if (alert === PostureAlertType.ITEM_03) {
+      return '低头趋势';
+    }
+    if (alert === PostureAlertType.ITEM_05) {
+      return '下巴前探';
+    }
+    if (alert === PostureAlertType.ITEM_06) {
+      return '头部偏斜';
+    }
+    if (alert === PostureAlertType.ITEM_07) {
+      return '身体靠近屏幕';
+    }
+    if (alert === PostureAlertType.ITEM_10) {
+      return '屏幕偏低';
+    }
+    if (alert === PostureAlertType.ITEM_11) {
       return '嘴巴张开';
+    }
+    if (alert === PostureAlertType.ITEM_12) {
+      return '久坐提醒';
     }
     return '坐姿端正';
   }
   private postureInsightAdvice(): string {
     const alert = this.primaryPostureAlert();
-    if (alert === PostureAlertType.BODY_SLIDE) {
-      return '把背靠回椅背，骨盆坐稳，别让身体继续往下滑。';
+    if (alert === PostureAlertType.ITEM_01) {
+      return '肩膀向后打开，胸口轻轻向上，背轻轻靠回椅背。';
     }
-    if (alert === PostureAlertType.HEAD_DROP) {
-      return '抬高下巴一点，让视线回到屏幕上缘附近。';
-    }
-    if (alert === PostureAlertType.KYPHOSIS) {
-      return this.sitLabel.indexOf('靠前') >= 0 ?
-        '身体坐回椅背，手臂可以向前操作，但胸口别跟着贴近屏幕。' :
-        '肩膀向后打开，胸口轻轻向上，别趴向屏幕。';
-    }
-    if (alert === PostureAlertType.SHOULDER_TILT) {
+    if (alert === PostureAlertType.ITEM_02) {
       return '两侧肩膀放平，重心回到椅子中间。';
     }
-    if (alert === PostureAlertType.MOUTH_OPEN) {
+    if (alert === PostureAlertType.ITEM_03) {
+      return '抬高下巴一点，让视线回到屏幕上缘附近。';
+    }
+    if (alert === PostureAlertType.ITEM_05) {
+      return '把下巴轻轻往回收，避免脖子跟着屏幕往前探。';
+    }
+    if (alert === PostureAlertType.ITEM_06) {
+      return '头部回到身体中线，屏幕尽量放在正前方。';
+    }
+    if (alert === PostureAlertType.ITEM_07) {
+      return '身体坐回椅背，手臂可以向前操作，但胸口别跟着贴近屏幕。';
+    }
+    if (alert === PostureAlertType.ITEM_10) {
+      return '把屏幕垫高一点，减少反复低头。';
+    }
+    if (alert === PostureAlertType.ITEM_11) {
       return '下颌放松，嘴唇自然闭合，鼻呼吸会更稳。';
+    }
+    if (alert === PostureAlertType.ITEM_12) {
+      return '深呼吸几次，顺便检查双脚是否平放在地面。';
     }
     return '保持屏幕略低于视线，肩膀放松，腰背自然伸展。';
   }
@@ -1390,65 +1473,69 @@ struct Index {
   }
   private postureSpinePath(): string {
     const alert = this.primaryPostureAlert();
-    if (alert === PostureAlertType.BODY_SLIDE) {
+    if (alert === PostureAlertType.ITEM_07) {
       return 'M54 112 C48 88 50 62 62 40';
     }
-    if (alert === PostureAlertType.HEAD_DROP) {
+    if (alert === PostureAlertType.ITEM_03 || alert === PostureAlertType.ITEM_05 ||
+      alert === PostureAlertType.ITEM_10) {
       return 'M58 114 C54 88 60 60 82 42';
     }
-    if (alert === PostureAlertType.KYPHOSIS) {
+    if (alert === PostureAlertType.ITEM_01) {
       return 'M64 114 C46 88 50 60 84 42';
     }
-    if (alert === PostureAlertType.SHOULDER_TILT) {
+    if (alert === PostureAlertType.ITEM_02 || alert === PostureAlertType.ITEM_06) {
       return 'M60 114 C54 88 58 60 72 38';
     }
     return 'M58 114 C56 88 58 60 66 36';
   }
   private postureBackPath(): string {
     const alert = this.primaryPostureAlert();
-    if (alert === PostureAlertType.BODY_SLIDE) {
+    if (alert === PostureAlertType.ITEM_07) {
       return 'M36 114 C28 86 36 58 62 38';
     }
-    if (alert === PostureAlertType.HEAD_DROP) {
+    if (alert === PostureAlertType.ITEM_03 || alert === PostureAlertType.ITEM_05 ||
+      alert === PostureAlertType.ITEM_10) {
       return 'M38 112 C30 84 44 56 80 36';
     }
-    if (alert === PostureAlertType.KYPHOSIS) {
+    if (alert === PostureAlertType.ITEM_01) {
       return 'M36 112 C26 84 42 56 84 36';
     }
-    if (alert === PostureAlertType.SHOULDER_TILT) {
+    if (alert === PostureAlertType.ITEM_02 || alert === PostureAlertType.ITEM_06) {
       return 'M38 112 C32 84 46 56 72 36';
     }
     return 'M42 112 C38 84 44 56 64 34';
   }
   private postureShoulderPath(): string {
     const alert = this.primaryPostureAlert();
-    if (alert === PostureAlertType.SHOULDER_TILT) {
+    if (alert === PostureAlertType.ITEM_02) {
       return 'M38 64 L92 52';
     }
-    if (alert === PostureAlertType.KYPHOSIS) {
+    if (alert === PostureAlertType.ITEM_01) {
       return 'M48 66 L86 58';
     }
     return 'M40 64 L88 64';
   }
   private postureHeadX(): number {
     const alert = this.primaryPostureAlert();
-    if (alert === PostureAlertType.BODY_SLIDE) {
+    if (alert === PostureAlertType.ITEM_07) {
       return 44;
     }
-    if (alert === PostureAlertType.HEAD_DROP || alert === PostureAlertType.KYPHOSIS) {
+    if (alert === PostureAlertType.ITEM_01 || alert === PostureAlertType.ITEM_03 ||
+      alert === PostureAlertType.ITEM_05 || alert === PostureAlertType.ITEM_10) {
       return 76;
     }
-    if (alert === PostureAlertType.SHOULDER_TILT) {
+    if (alert === PostureAlertType.ITEM_02 || alert === PostureAlertType.ITEM_06) {
       return 68;
     }
     return 58;
   }
   private postureHeadY(): number {
     const alert = this.primaryPostureAlert();
-    if (alert === PostureAlertType.BODY_SLIDE) {
+    if (alert === PostureAlertType.ITEM_07) {
       return 26;
     }
-    if (alert === PostureAlertType.HEAD_DROP || alert === PostureAlertType.KYPHOSIS) {
+    if (alert === PostureAlertType.ITEM_01 || alert === PostureAlertType.ITEM_03 ||
+      alert === PostureAlertType.ITEM_05 || alert === PostureAlertType.ITEM_10) {
       return 24;
     }
     return 18;
@@ -1461,10 +1548,10 @@ struct Index {
   }
   private postureCueSymbol(): string {
     const alert = this.primaryPostureAlert();
-    if (alert === PostureAlertType.SHOULDER_TILT) {
+    if (alert === PostureAlertType.ITEM_02 || alert === PostureAlertType.ITEM_06) {
       return '↔';
     }
-    if (alert === PostureAlertType.MOUTH_OPEN) {
+    if (alert === PostureAlertType.ITEM_11) {
       return '·';
     }
     return '↑';
@@ -1606,6 +1693,193 @@ struct Index {
     .backgroundColor(SURFACE)
     .borderRadius(8)
     .border({ width: 1, color: LINE })
+  }
+  private alertGuideId(type: PostureAlertType): number {
+    if (type === PostureAlertType.ITEM_01 || type === PostureAlertType.KYPHOSIS) {
+      return 1;
+    }
+    if (type === PostureAlertType.ITEM_02 || type === PostureAlertType.SHOULDER_TILT) {
+      return 2;
+    }
+    if (type === PostureAlertType.ITEM_03 || type === PostureAlertType.HEAD_DROP) {
+      return 3;
+    }
+    if (type === PostureAlertType.ITEM_05) {
+      return 5;
+    }
+    if (type === PostureAlertType.ITEM_06) {
+      return 6;
+    }
+    if (type === PostureAlertType.ITEM_07 || type === PostureAlertType.BODY_SLIDE) {
+      return 7;
+    }
+    if (type === PostureAlertType.ITEM_10) {
+      return 10;
+    }
+    if (type === PostureAlertType.ITEM_11 || type === PostureAlertType.MOUTH_OPEN) {
+      return 11;
+    }
+    if (type === PostureAlertType.ITEM_12) {
+      return 12;
+    }
+    return 1;
+  }
+  private alertIncorrectResource(type: PostureAlertType): Resource {
+    return this.guideIncorrectResource(this.alertGuideId(type));
+  }
+  private alertCorrectResource(type: PostureAlertType): Resource {
+    return this.guideCorrectResource(this.alertGuideId(type));
+  }
+  private guideIncorrectResource(id: number): Resource {
+    if (id === 1) {
+      return $rawfile('assets/posture/01_posture_straighten_incorrect.png');
+    }
+    if (id === 2) {
+      return $rawfile('assets/posture/02_body_centering_incorrect.png');
+    }
+    if (id === 3) {
+      return $rawfile('assets/posture/03_head_lift_incorrect.png');
+    }
+    if (id === 4) {
+      return $rawfile('assets/posture/04_shoulder_relax_incorrect.png');
+    }
+    if (id === 5) {
+      return $rawfile('assets/posture/05_chin_tuck_incorrect.png');
+    }
+    if (id === 6) {
+      return $rawfile('assets/posture/06_head_center_incorrect.png');
+    }
+    if (id === 7) {
+      return $rawfile('assets/posture/07_back_support_incorrect.png');
+    }
+    if (id === 8) {
+      return $rawfile('assets/posture/08_feet_flat_incorrect.png');
+    }
+    if (id === 9) {
+      return $rawfile('assets/posture/09_arm_relax_incorrect.png');
+    }
+    if (id === 10) {
+      return $rawfile('assets/posture/10_screen_height_incorrect.png');
+    }
+    if (id === 11) {
+      return $rawfile('assets/posture/11_mouth_close_incorrect.png');
+    }
+    return $rawfile('assets/posture/12_deep_breath_incorrect.png');
+  }
+  private guideCorrectResource(id: number): Resource {
+    if (id === 1) {
+      return $rawfile('assets/posture/01_posture_straighten_correct.png');
+    }
+    if (id === 2) {
+      return $rawfile('assets/posture/02_body_centering_correct.png');
+    }
+    if (id === 3) {
+      return $rawfile('assets/posture/03_head_lift_correct.png');
+    }
+    if (id === 4) {
+      return $rawfile('assets/posture/04_shoulder_relax_correct.png');
+    }
+    if (id === 5) {
+      return $rawfile('assets/posture/05_chin_tuck_correct.png');
+    }
+    if (id === 6) {
+      return $rawfile('assets/posture/06_head_center_correct.png');
+    }
+    if (id === 7) {
+      return $rawfile('assets/posture/07_back_support_correct.png');
+    }
+    if (id === 8) {
+      return $rawfile('assets/posture/08_feet_flat_correct.png');
+    }
+    if (id === 9) {
+      return $rawfile('assets/posture/09_arm_relax_correct.png');
+    }
+    if (id === 10) {
+      return $rawfile('assets/posture/10_screen_height_correct.png');
+    }
+    if (id === 11) {
+      return $rawfile('assets/posture/11_mouth_close_correct.png');
+    }
+    return $rawfile('assets/posture/12_deep_breath_correct.png');
+  }
+  @Builder
+  private GuidePage() {
+    Column({ space: 12 }) {
+      Row() {
+        Text('坐姿指南')
+          .fontSize(20)
+          .fontWeight(FontWeight.Bold)
+          .fontColor(INK)
+        Blank()
+        Text('12 项')
+          .fontSize(13)
+          .fontColor(MUTED)
+      }
+      .width('100%')
+      ForEach(GUIDE_ITEMS, (item: PostureGuideItem) => {
+        this.GuideCard(item)
+      }, (item: PostureGuideItem) => item.id.toString())
+    }
+    .width('100%')
+  }
+  @Builder
+  private GuideCard(item: PostureGuideItem) {
+    Column({ space: 12 }) {
+      Row() {
+        Text(item.id.toString())
+          .width(30)
+          .height(30)
+          .fontSize(16)
+          .fontWeight(FontWeight.Bold)
+          .fontColor('#FFFFFF')
+          .textAlign(TextAlign.Center)
+          .lineHeight(30)
+          .backgroundColor('#EF563D')
+          .borderRadius(15)
+        Text(item.title)
+          .fontSize(19)
+          .fontWeight(FontWeight.Bold)
+          .fontColor(INK)
+          .layoutWeight(1)
+          .maxLines(1)
+          .textOverflow({ overflow: TextOverflow.Ellipsis })
+      }
+      .width('100%')
+      Text(item.subtitle)
+        .fontSize(14)
+        .fontColor(MUTED)
+        .lineHeight(20)
+        .width('100%')
+      Row({ space: 10 }) {
+        this.GuideImage(this.guideIncorrectResource(item.id), RED_SOFT)
+        Text('→')
+          .width(28)
+          .fontSize(22)
+          .fontWeight(FontWeight.Bold)
+          .fontColor('#EF563D')
+          .textAlign(TextAlign.Center)
+        this.GuideImage(this.guideCorrectResource(item.id), GREEN_SOFT)
+      }
+      .width('100%')
+    }
+    .width('100%')
+    .padding(16)
+    .backgroundColor(SURFACE)
+    .borderRadius(8)
+    .border({ width: 1, color: LINE })
+  }
+  @Builder
+  private GuideImage(resource: Resource, background: string) {
+    Stack() {
+      Image(resource)
+        .width('92%')
+        .height('92%')
+        .objectFit(ImageFit.Contain)
+    }
+    .layoutWeight(1)
+    .height(146)
+    .backgroundColor(background)
+    .borderRadius(8)
   }
   @Builder
   private SettingsPage() {

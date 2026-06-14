@@ -13,6 +13,17 @@ import {
 
 const MIN_POINT_SCORE = 0.35;
 const SENSITIVE_MODE_THRESHOLD = 1.05;
+const POSTURE_ALERT_PRIORITY: PostureAlertType[] = [
+  PostureAlertType.ITEM_02,
+  PostureAlertType.ITEM_01,
+  PostureAlertType.ITEM_07,
+  PostureAlertType.ITEM_03,
+  PostureAlertType.ITEM_05,
+  PostureAlertType.ITEM_10,
+  PostureAlertType.ITEM_06,
+  PostureAlertType.ITEM_11,
+  PostureAlertType.ITEM_12
+];
 
 function finiteOr(value: number, fallback: number): number {
   return Number.isFinite(value) ? value : fallback;
@@ -137,11 +148,32 @@ function noseToShoulderRatio(nose: Point2D, left: Point2D, right: Point2D): numb
   return (nose.y - shoulderMidY(left, right)) / shoulderWidthHorizontal(left, right);
 }
 
+function scaled(base: number, sensitivity: number): number {
+  return base / sensitivity;
+}
+
+function compressionThreshold(loss: number, sensitivity: number): number {
+  return 1 - loss / sensitivity;
+}
+
+function expansionThreshold(gain: number, sensitivity: number): number {
+  return 1 + gain / sensitivity;
+}
+
+function orderedActiveAlerts(candidates: PostureAlertType[]): PostureAlertType[] {
+  const active: PostureAlertType[] = [];
+  POSTURE_ALERT_PRIORITY.forEach((type: PostureAlertType) => {
+    if (candidates.includes(type)) {
+      active.push(type);
+    }
+  });
+  return active;
+}
+
 function evaluateSit(skeleton: SkeletonFrame, face: FaceFrame, profile: CalibrationProfile): MetricResult {
   const sensitivity = Math.max(profile.sensitivity, 0.6);
   const ls = skeleton.leftShoulder;
   const rs = skeleton.rightShoulder;
-  const nose = skeleton.nose;
   if (!reliable(ls) || !reliable(rs)) {
     if (face.confidence >= 0.25) {
       const deltaRoll = Math.abs(face.roll - profile.neutralRoll);
@@ -155,7 +187,7 @@ function evaluateSit(skeleton: SkeletonFrame, face: FaceFrame, profile: Calibrat
         label = '头歪明显';
       }
       return makeMetric(level, deltaRoll, profile.neutralRoll, scoreFromLevel(level, deltaRoll, badRoll), label,
-        level === PostureLevel.GOOD ? PostureAlertType.NONE : PostureAlertType.SHOULDER_TILT);
+        level === PostureLevel.GOOD ? PostureAlertType.NONE : PostureAlertType.ITEM_06);
     }
     return makeMetric(PostureLevel.UNKNOWN, 0, profile.neutralShoulderTilt, 68, '未识别上半身');
   }
@@ -166,10 +198,10 @@ function evaluateSit(skeleton: SkeletonFrame, face: FaceFrame, profile: Calibrat
   const tiltRatio = (left.y - right.y) / shoulderWidth;
   const deltaTilt = Math.abs(tiltRatio - profile.neutralShoulderTilt);
   const deltaRoll = face.confidence >= 0.25 ? Math.abs(face.roll - profile.neutralRoll) : 0;
-  const warnTilt = 0.06 / sensitivity;
-  const badTilt = 0.10 / sensitivity;
-  const warnRoll = 10 / sensitivity;
-  const badRoll = 18 / sensitivity;
+  const warnTilt = scaled(0.06, sensitivity);
+  const badTilt = scaled(0.10, sensitivity);
+  const warnRoll = scaled(10, sensitivity);
+  const badRoll = scaled(18, sensitivity);
 
   const currentFaceCenterY = faceCenterY(face);
   const currentShoulderMidY = shoulderMidY(left, right);
@@ -177,8 +209,8 @@ function evaluateSit(skeleton: SkeletonFrame, face: FaceFrame, profile: Calibrat
     (currentFaceCenterY - profile.neutralFaceCenterY) / Math.max(profile.neutralFaceHeight, 1) : 0;
   const deltaShoulderY = profile.neutralShoulderMidY > 0 ?
     (currentShoulderMidY - profile.neutralShoulderMidY) / Math.max(profile.neutralShoulderWidth, 1) : 0;
-  const slideWarn = deltaFaceY > 0.28 / sensitivity && deltaShoulderY > 0.08 / sensitivity;
-  const slideBad = deltaFaceY > 0.45 / sensitivity && deltaShoulderY > 0.14 / sensitivity;
+  const slideWarn = deltaFaceY > scaled(0.28, sensitivity) && deltaShoulderY > scaled(0.08, sensitivity);
+  const slideBad = deltaFaceY > scaled(0.45, sensitivity) && deltaShoulderY > scaled(0.14, sensitivity);
 
   const compression = shoulderWidth / Math.max(profile.neutralShoulderWidth, 1);
   const expansion = faceArea(face) / Math.max(profile.neutralFaceArea, 1);
@@ -186,46 +218,43 @@ function evaluateSit(skeleton: SkeletonFrame, face: FaceFrame, profile: Calibrat
   const compressionLoss = Math.max(0, 1 - compression);
   const faceExpansionDelta = Math.max(0, expansion - 1);
   const hasShoulderBaseline = profile.neutralShoulderWidth > 1;
-  const kyphosisWarnDrop = sensitiveMode ? 0.10 / sensitivity : 0.16 / sensitivity;
-  const kyphosisBadDrop = sensitiveMode ? 0.18 / sensitivity : 0.26 / sensitivity;
-  const faceCloserDrop = sensitiveMode ? 0.20 / sensitivity : 0.28 / sensitivity;
-  const strongCompressionWarnDrop = 0.24 / sensitivity;
-  const strongCompressionBadDrop = 0.32 / sensitivity;
-  const faceCloser = face.confidence >= 0.25 && faceExpansionDelta > faceCloserDrop;
-  const compressionWarn = hasShoulderBaseline && compressionLoss > kyphosisWarnDrop;
-  const compressionBad = hasShoulderBaseline && compressionLoss > kyphosisBadDrop;
-  const kyphosisWarn = compressionWarn &&
-    (sensitiveMode || faceCloser || compressionLoss > strongCompressionWarnDrop);
-  const kyphosisBad = compressionBad &&
-    (sensitiveMode || faceCloser || compressionLoss > strongCompressionBadDrop);
-
-  const tiltWarn = deltaTilt > warnTilt || deltaRoll > warnRoll;
-  const tiltBad = deltaTilt > badTilt || deltaRoll > badRoll;
-  const level = levelFromAlert(slideWarn || kyphosisWarn || tiltWarn, slideBad || kyphosisBad || tiltBad);
+  const shouldersRounded = hasShoulderBaseline && compression < compressionThreshold(0.12, sensitivity);
+  const shouldersRoundedBad = hasShoulderBaseline && compression < compressionThreshold(sensitiveMode ? 0.18 : 0.24, sensitivity);
+  const notLeaningForward = expansion < expansionThreshold(0.15, sensitivity);
+  const leaningForward = face.confidence >= 0.25 && expansion > expansionThreshold(0.18, sensitivity);
+  const leaningForwardBad = face.confidence >= 0.25 && expansion > expansionThreshold(0.28, sensitivity);
+  const faceNotDropped = deltaFaceY < scaled(0.25, sensitivity);
+  const bodyTiltWarn = deltaTilt > scaled(0.06, sensitivity) && deltaRoll > scaled(8, sensitivity);
+  const bodyTiltBad = deltaTilt > badTilt && deltaRoll > badRoll;
+  const kyphosisWarn = shouldersRounded && notLeaningForward;
+  const kyphosisBad = shouldersRoundedBad && notLeaningForward;
+  const chairSupportWarn = (leaningForward && faceNotDropped) || slideWarn;
+  const chairSupportBad = (leaningForwardBad && faceNotDropped) || slideBad;
+  const headOnlyTiltWarn = deltaRoll > scaled(10, sensitivity) && deltaTilt < scaled(0.04, sensitivity);
+  const headOnlyTiltBad = deltaRoll > badRoll && deltaTilt < scaled(0.05, sensitivity);
+  const tiltWarn = bodyTiltWarn || headOnlyTiltWarn;
+  const tiltBad = bodyTiltBad || headOnlyTiltBad;
+  const level = levelFromAlert(chairSupportWarn || kyphosisWarn || tiltWarn,
+    chairSupportBad || kyphosisBad || tiltBad);
 
   let label = '肩颈稳定';
   let alertType = PostureAlertType.NONE;
-  if (slideBad || slideWarn) {
-    label = slideBad ? '身体下滑' : '有点下滑';
-    alertType = PostureAlertType.BODY_SLIDE;
+  if (bodyTiltBad || bodyTiltWarn) {
+    label = bodyTiltBad ? '身体歪斜' : '左右不平';
+    alertType = PostureAlertType.ITEM_02;
   } else if (kyphosisBad || kyphosisWarn) {
     if (kyphosisBad) {
-      label = faceCloser ? '肩膀前扣' : '含胸明显';
-    } else if (faceCloser && sensitiveMode) {
       label = '肩膀前扣';
-    } else if (faceCloser) {
-      label = '身体靠前';
     } else {
       label = '含胸趋势';
     }
-    alertType = PostureAlertType.KYPHOSIS;
-  } else if (tiltBad || tiltWarn) {
-    alertType = PostureAlertType.SHOULDER_TILT;
-    if (deltaRoll > warnRoll && deltaTilt <= warnTilt) {
-      label = tiltBad ? '头歪明显' : '头有点歪';
-    } else {
-      label = tiltBad ? '身体歪斜' : '左右不平';
-    }
+    alertType = PostureAlertType.ITEM_01;
+  } else if (chairSupportBad || chairSupportWarn) {
+    label = chairSupportBad ? '靠回椅背' : '身体靠前';
+    alertType = PostureAlertType.ITEM_07;
+  } else if (headOnlyTiltBad || headOnlyTiltWarn) {
+    label = headOnlyTiltBad ? '头歪明显' : '头有点歪';
+    alertType = PostureAlertType.ITEM_06;
   }
 
   const tiltPressure = deltaTilt / Math.max(warnTilt, 0.01);
@@ -233,17 +262,10 @@ function evaluateSit(skeleton: SkeletonFrame, face: FaceFrame, profile: Calibrat
   const slidePressure = Math.max(deltaFaceY / 0.35, deltaShoulderY / 0.10);
   let kyphosisPressure = 0;
   if (hasShoulderBaseline) {
-    if (kyphosisWarn || kyphosisBad || sensitiveMode) {
-      kyphosisPressure = Math.max(
-        compressionLoss / Math.max(kyphosisWarnDrop, 0.01),
-        faceExpansionDelta / Math.max(faceCloserDrop, 0.01)
-      );
-    } else {
-      kyphosisPressure = Math.max(
-        compressionLoss / Math.max(strongCompressionWarnDrop, 0.01),
-        faceExpansionDelta / Math.max(faceCloserDrop, 0.01)
-      ) * 0.7;
-    }
+    kyphosisPressure = Math.max(
+      compressionLoss / Math.max(scaled(0.12, sensitivity), 0.01),
+      faceExpansionDelta / Math.max(scaled(0.18, sensitivity), 0.01)
+    );
   }
   const pressure = Math.max(tiltPressure, rollPressure, slidePressure, kyphosisPressure);
   return makeMetric(level, pressure * 100, 100, scoreFromLevel(level, pressure * 10, 18), label, alertType);
@@ -263,20 +285,30 @@ function evaluateChin(face: FaceFrame, skeleton: SkeletonFrame, profile: Calibra
       skeleton.rightShoulder as Point2D
     ) - profile.neutralNoseToShoulderRatio);
   }
-  const warnPitch = 13 / sensitivity;
-  const badPitch = 25 / sensitivity;
-  const warnNose = 0.10 / sensitivity;
-  const badNose = 0.18 / sensitivity;
+  const warnPitch = scaled(13, sensitivity);
+  const badPitch = scaled(25, sensitivity);
+  const warnNose = scaled(0.08, sensitivity);
+  const badNose = scaled(0.18, sensitivity);
+  const headDown = pitchDelta > scaled(15, sensitivity) && noseDrop < scaled(0.08, sensitivity);
+  const forwardHead = noseDrop > scaled(0.08, sensitivity) && pitchDelta > scaled(8, sensitivity);
   const level = levelFromAlert(pitchDelta > warnPitch || noseDrop > warnNose, pitchDelta > badPitch || noseDrop > badNose);
   let label = '下巴高度正常';
+  let alertType = PostureAlertType.NONE;
   if (level === PostureLevel.WARN) {
     label = '轻微低头';
   } else if (level === PostureLevel.BAD) {
     label = '低头过久';
   }
+  if (headDown) {
+    alertType = PostureAlertType.ITEM_03;
+    label = level === PostureLevel.BAD ? '低头过久' : '轻微低头';
+  } else if (forwardHead) {
+    alertType = PostureAlertType.ITEM_05;
+    label = level === PostureLevel.BAD ? '脖子前探明显' : '下巴有点前探';
+  }
   const pressure = Math.max(pitchDelta, noseDrop * 100);
   return makeMetric(level, face.pitch - profile.neutralPitch, profile.neutralPitch, scoreFromLevel(level, pressure, badPitch), label,
-    level === PostureLevel.GOOD ? PostureAlertType.NONE : PostureAlertType.HEAD_DROP);
+    level === PostureLevel.GOOD ? PostureAlertType.NONE : alertType);
 }
 
 function evaluateMouth(face: FaceFrame, profile: CalibrationProfile): MetricResult {
@@ -285,7 +317,7 @@ function evaluateMouth(face: FaceFrame, profile: CalibrationProfile): MetricResu
     return makeMetric(PostureLevel.UNKNOWN, face.mouthOpenRatio, profile.neutralMouthRatio, 72, '嘴部未识别');
   }
   const openDelta = Math.max(0, face.mouthOpenRatio - profile.neutralMouthRatio);
-  const warn = 0.12 / sensitivity;
+  const warn = 0.15 / sensitivity;
   const bad = 0.25 / sensitivity;
   const level = levelFromDelta(openDelta, warn, bad);
   let label = '嘴部放松';
@@ -295,7 +327,7 @@ function evaluateMouth(face: FaceFrame, profile: CalibrationProfile): MetricResu
     label = '张嘴明显';
   }
   return makeMetric(level, face.mouthOpenRatio, profile.neutralMouthRatio, scoreFromLevel(level, openDelta * 100, bad * 100), label,
-    level === PostureLevel.GOOD ? PostureAlertType.NONE : PostureAlertType.MOUTH_OPEN);
+    level === PostureLevel.GOOD ? PostureAlertType.NONE : PostureAlertType.ITEM_11);
 }
 
 function summaryFor(sit: MetricResult, chin: MetricResult, mouth: MetricResult, score: number): string {
@@ -322,8 +354,8 @@ export function evaluatePosture(sample: PostureSample, profile: CalibrationProfi
   const chin = evaluateChin(sample.face, sample.skeleton, profile);
   const mouth = evaluateMouth(sample.face, profile);
   const score = Math.round(clamp(sit.score * 0.4 + chin.score * 0.45 + mouth.score * 0.15, 0, 100));
-  const activeAlerts = [sit.alertType, chin.alertType, mouth.alertType].filter((type: PostureAlertType) =>
-    type !== PostureAlertType.NONE);
+  const orderedAlerts = orderedActiveAlerts([sit.alertType, chin.alertType, mouth.alertType]);
+  const activeAlerts = orderedAlerts.length > 0 ? [orderedAlerts[0]] : [];
   return {
     timestamp: sample.timestamp,
     sit,

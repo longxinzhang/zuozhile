@@ -1,7 +1,7 @@
 # Core Vision 接入说明
 
-默认设置仍保留 `MockPostureSource`，用于无相机环境验证 UI、评分和提醒流程。
-设置页开启“真实相机检测”后，当前工程会使用
+默认设置使用真实相机检测；设置页关闭“真实相机检测”后，会回退到 `MockPostureSource`
+用于无相机环境验证 UI、评分和提醒流程。真实检测使用
 `services/CoreVisionPostureSource.ets` + `services/CoreVisionPostureDetector.ets`
 完成 `CameraKit -> JPEG -> PixelMap -> Core Vision -> PostureSample` 链路。
 
@@ -19,7 +19,7 @@
 ## 当前真机链路
 
 1. `Index.ets`
-   - 设置页开启“真实相机检测”后创建透明 `XComponent` 作为预览 surface。
+   - 默认创建透明 `XComponent` 作为预览 surface，设置页关闭“真实相机检测”后不创建。
    - 开始守护时申请 `ohos.permission.CAMERA`。
    - 通过 `CameraProbeService` 预检摄像头和输出能力。
    - 用 `CoreVisionPostureSource(context, surfaceId)` 替换模拟采样源。
@@ -57,20 +57,19 @@ export interface PostureSample {
 
 - `PostureCalibration.ets`：`记录基线` 采集 10 帧，分别对 pitch、roll、yaw、人脸中心/高度/面积、肩中点/肩宽、鼻肩比和嘴部比例取中位数。
 - `PostureEvaluator.ets`：
-  - D1 低头/颈前屈：face pitch 偏移为主，鼻尖到肩中点垂直比为辅助。
-  - D2 身体下滑：人脸中心下移 + 肩中点下移共同触发。
-  - D3 含胸/驼背：肩宽压缩为主，人脸面积膨胀为辅助；标准档会要求更强的肩宽压缩或配合脸部靠近，轻微前倾显示为“身体靠前”，灵敏档保留更积极的前扣提醒。
-  - D4 肩部歪斜：肩部倾斜比偏移 + face roll 偏移。
-  - D5 嘴巴张合：当前用 Face Detector 关键点粗估 mouthOpenRatio，后续可替换为 FaceAR blendshape。
+  - D1 低头/颈前屈：拆成 ITEM_03「抬头」和 ITEM_05「下巴收」；第 3 项反复触发后由提醒引擎升级为 ITEM_10「屏幕抬高」。
+  - D3 含胸/驼背：肩宽压缩且脸面积未明显膨胀时触发 ITEM_01「挺起来」；脸面积明显膨胀或下滑辅助信号触发 ITEM_07「靠回椅背」。
+  - D4 肩部歪斜：肩倾斜 + face roll 同时异常触发 ITEM_02「坐正」；只有头部 roll 异常且肩膀相对水平时触发 ITEM_06「头别歪」。
+  - D5 嘴巴张合：当前用 Face Detector 关键点粗估 mouthOpenRatio，输出 ITEM_11「嘴巴轻合」，后续可替换为 FaceAR blendshape。
 - `ReminderEngine.ets`：
-  - 每个 D1-D5 类型独立维护 `firstTriggeredAt`、连续触发帧数和上次提醒时间。
-  - 持续时间阈值按文档区分：D1/D4 20s、D2 30s、D3 25s、D5 15s。
-  - 同一项提醒后 120s 冷却。
-  - 多项同时满足时按 D2 > D1 > D3 > D4 > D5 选择最优先提醒。
-- `Index.ets`：轻提醒显示为守护页内紧凑横幅，强提醒显示为前台遮罩并可点“知道了”关闭，8 秒后也会自动收起。
+  - 每个 ITEM 类型独立维护 `firstTriggeredAt`、连续触发帧数和上次提醒时间。
+  - 按 ITEM_02 > ITEM_01 > ITEM_07 > ITEM_03 > ITEM_05 > ITEM_10 > ITEM_06 > ITEM_11 > ITEM_12 选择提醒。
+  - 普通姿态项提醒后 120s 冷却；ITEM_10 冷却 300s；ITEM_12 为 20 分钟久坐计时器。
+- `Index.ets`：轻提醒显示为守护页内紧凑横幅，强提醒显示为带姿势对比图的前台遮罩，可点“知道了”关闭，8 秒后也会自动收起。
 - `Index.ets`：灵敏度只保留“标准/灵敏”两档，切换时会重置分项提醒状态，避免旧档位累计的连续触发影响新档位。
 - `Index.ets`：首页三项指标使用两帧显示稳定策略；异常状态需要连续出现两帧才替换当前显示，恢复正常立即更新，用于减少单帧误识别导致的文案跳动。
-- 首页仍保持三块反馈：`坐姿` 聚合 D2/D3/D4，`抬头` 对应 D1，`嘴巴` 对应 D5。
+- `Index.ets`：新增 `指南` tab，加载 `rawfile/assets/posture` 的 12 组错误/正确姿势对比图。
+- 首页仍保持三块反馈：`坐姿` 聚合 ITEM_01/02/06/07，`抬头` 对应 ITEM_03/05/10，`嘴巴` 对应 ITEM_11。
 
 ## 2026-06-14 真机验证
 

@@ -16,6 +16,15 @@ export const SENSITIVE_SENSITIVITY = 1.2;
 
 export enum PostureAlertType {
   NONE = 'none',
+  ITEM_01 = 'ITEM_01',
+  ITEM_02 = 'ITEM_02',
+  ITEM_03 = 'ITEM_03',
+  ITEM_05 = 'ITEM_05',
+  ITEM_06 = 'ITEM_06',
+  ITEM_07 = 'ITEM_07',
+  ITEM_10 = 'ITEM_10',
+  ITEM_11 = 'ITEM_11',
+  ITEM_12 = 'ITEM_12',
   HEAD_DROP = 'D1_HEAD_DROP',
   BODY_SLIDE = 'D2_BODY_SLIDE',
   KYPHOSIS = 'D3_KYPHOSIS',
@@ -158,7 +167,7 @@ export function createDefaultCalibration(): CalibrationProfile {
 export function createDefaultSettings(): UserSettings {
   return {
     profile: createDefaultCalibration(),
-    useCoreVision: false,
+    useCoreVision: true,
     privacyMode: true,
     gentleSound: false,
     vibration: true

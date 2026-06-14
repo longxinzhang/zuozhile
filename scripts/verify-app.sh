@@ -11,7 +11,7 @@ cd "$PROJECT_ROOT"
 grep -q 'com.longxin.zuozhile' AppScope/app.json5
 grep -q '坐直了' AppScope/resources/base/element/string.json
 grep -q 'ohos.permission.CAMERA' entry/src/main/module.json5
-grep -q 'MockFrameSampler' README.md
+grep -q '真实相机检测' README.md
 
 ./scripts/build-hap.sh --stacktrace
 

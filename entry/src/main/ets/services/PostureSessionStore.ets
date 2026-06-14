@@ -87,10 +87,27 @@ function sanitizeAction(action: ReminderAction): ReminderAction {
 }
 
 function sanitizeAlertType(type: PostureAlertType): PostureAlertType {
-  if (type === PostureAlertType.HEAD_DROP || type === PostureAlertType.BODY_SLIDE ||
-    type === PostureAlertType.KYPHOSIS || type === PostureAlertType.SHOULDER_TILT ||
-    type === PostureAlertType.MOUTH_OPEN) {
+  if (type === PostureAlertType.ITEM_01 || type === PostureAlertType.ITEM_02 ||
+    type === PostureAlertType.ITEM_03 || type === PostureAlertType.ITEM_05 ||
+    type === PostureAlertType.ITEM_06 || type === PostureAlertType.ITEM_07 ||
+    type === PostureAlertType.ITEM_10 || type === PostureAlertType.ITEM_11 ||
+    type === PostureAlertType.ITEM_12) {
     return type;
+  }
+  if (type === PostureAlertType.HEAD_DROP) {
+    return PostureAlertType.ITEM_03;
+  }
+  if (type === PostureAlertType.BODY_SLIDE) {
+    return PostureAlertType.ITEM_07;
+  }
+  if (type === PostureAlertType.KYPHOSIS) {
+    return PostureAlertType.ITEM_01;
+  }
+  if (type === PostureAlertType.SHOULDER_TILT) {
+    return PostureAlertType.ITEM_02;
+  }
+  if (type === PostureAlertType.MOUTH_OPEN) {
+    return PostureAlertType.ITEM_11;
   }
   return PostureAlertType.NONE;
 }
