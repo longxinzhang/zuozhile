@@ -1,0 +1,12 @@
+.hvigor/
+.preview/
+build/
+**/build/
+oh_modules/
+entry/oh_modules/
+local.properties
+.idea/
+.DS_Store
+zuozhile-*.json
+zuozhile-*.jpeg
+zuozhile-*.png

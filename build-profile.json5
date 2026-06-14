@@ -1,0 +1,56 @@
+{
+  "app": {
+    "products": [
+      {
+        "name": "default",
+        "signingConfig": "default",
+        "targetSdkVersion": "6.1.0(23)",
+        "compatibleSdkVersion": "6.1.0(23)",
+        "runtimeOS": "HarmonyOS",
+        "buildOption": {
+          "strictMode": {
+            "caseSensitiveCheck": true,
+            "useNormalizedOHMUrl": true
+          }
+        }
+      }
+    ],
+    "buildModeSet": [
+      {
+        "name": "debug"
+      },
+      {
+        "name": "release"
+      }
+    ],
+    "signingConfigs": [
+      {
+        "name": "default",
+        "type": "HarmonyOS",
+        "material": {
+          "certpath": "/Users/zhanglongxin/.ohos/config/default_zuozhile_LRmm9IfKQzzSVrnRfqmSr4QIojbLGryEB58-9fa3PPM=.cer",
+          "keyAlias": "debugKey",
+          "keyPassword": "0000001B533B233E9F0961C686B6CA914E9F58298CE960D19128406C03FB619A54EB396C0BD9CA1F526C6D",
+          "profile": "/Users/zhanglongxin/.ohos/config/default_zuozhile_LRmm9IfKQzzSVrnRfqmSr4QIojbLGryEB58-9fa3PPM=.p7b",
+          "signAlg": "SHA256withECDSA",
+          "storeFile": "/Users/zhanglongxin/.ohos/config/default_zuozhile_LRmm9IfKQzzSVrnRfqmSr4QIojbLGryEB58-9fa3PPM=.p12",
+          "storePassword": "0000001B026A1204F83AC9B0681797D3380C65EE3A3D1EB8AA1089A7026AC2367B08812BDFAF968BF4B16C"
+        }
+      }
+    ]
+  },
+  "modules": [
+    {
+      "name": "entry",
+      "srcPath": "./entry",
+      "targets": [
+        {
+          "name": "default",
+          "applyToProducts": [
+            "default"
+          ]
+        }
+      ]
+    }
+  ]
+}

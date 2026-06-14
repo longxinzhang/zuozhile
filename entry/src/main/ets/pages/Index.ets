@@ -1,0 +1,1894 @@
+import { abilityAccessCtrl, common, Permissions } from '@kit.AbilityKit';
+import { buildCalibrationProfile } from '../models/PostureCalibration';
+import { evaluatePosture } from '../models/PostureEvaluator';
+import { ReminderEngine, actionLabel } from '../models/ReminderEngine';
+import { HourBucket, buildRecentBuckets, computeTodayStats } from '../models/SessionStats';
+import {
+  AppData,
+  MetricResult,
+  PostureAlertType,
+  PostureLevel,
+  PostureResult,
+  PostureSample,
+  ReminderAction,
+  SENSITIVE_SENSITIVITY,
+  SessionRecord,
+  STANDARD_SENSITIVITY,
+  TodayStats,
+  UserSettings,
+  createDefaultData,
+  createDefaultSettings
+} from '../models/PostureTypes';
+import { PostureSessionStore } from '../services/PostureSessionStore';
+import { BaselineTile, SmallCounter, StatTile } from '../components/StatusTiles';
+import { MockPostureSource } from '../services/MockPostureSource';
+import { CoreVisionPostureSource } from '../services/CoreVisionPostureSource';
+import { GuardWindowService } from '../services/GuardWindowService';
+import { ReminderFeedbackService } from '../services/ReminderFeedbackService';
+import { PostureSource } from '../services/PostureSource';
+import { CameraProbeResult, CameraProbeService } from '../services/CameraProbeService';
+import {
+  BLUE,
+  GREEN,
+  GREEN_SOFT,
+  INK,
+  LINE,
+  MUTED,
+  RED,
+  RED_SOFT,
+  SOFT,
+  SURFACE,
+  YELLOW,
+  YELLOW_SOFT,
+  levelColor,
+  levelSoftColor,
+  levelText,
+  reminderColor,
+  scoreColor
+} from '../theme/ZuozhiTheme';
+
+interface TabItem {
+  index: number;
+  label: string;
+}
+
+enum DisplayMetricType {
+  SIT = 'sit',
+  CHIN = 'chin',
+  MOUTH = 'mouth'
+}
+
+const TABS: TabItem[] = [
+  { index: 0, label: '守护' },
+  { index: 1, label: '统计' },
+  { index: 2, label: '设置' }
+];
+const CAMERA_PERMISSION: Permissions = 'ohos.permission.CAMERA';
+const CALIBRATION_FRAME_COUNT = 10;
+const CALIBRATION_COUNTDOWN_SECONDS = 3;
+const CALIBRATION_COUNTDOWN_DELAY_MS = 1000;
+const CALIBRATION_SAMPLE_DELAY_MS = 500;
+const HARD_REMINDER_TIMEOUT_MS = 8000;
+const DISPLAY_STABLE_FRAMES = 2;
+
+@Entry
+@Component
+struct Index {
+  @State private loaded: boolean = false;
+  @State private activeTab: number = 0;
+  @State private isGuarding: boolean = false;
+  @State private isStartingGuard: boolean = false;
+  @State private settings: UserSettings = createDefaultSettings();
+  @State private records: SessionRecord[] = [];
+  @State private score: number = 92;
+  @State private summary: string = '坐姿在线';
+  @State private sitLevel: PostureLevel = PostureLevel.GOOD;
+  @State private chinLevel: PostureLevel = PostureLevel.GOOD;
+  @State private mouthLevel: PostureLevel = PostureLevel.GOOD;
+  @State private sitLabel: string = '肩颈稳定';
+  @State private chinLabel: string = '下巴高度正常';
+  @State private mouthLabel: string = '嘴部放松';
+  @State private sitValue: number = 7;
+  @State private chinValue: number = 0;
+  @State private mouthValue: number = 0.16;
+  @State private reminderText: string = '暂无提醒';
+  @State private reminderAction: ReminderAction = ReminderAction.NONE;
+  @State private reminderAlertType: PostureAlertType = PostureAlertType.NONE;
+  @State private reminderMessage: string = '';
+  @State private showHardReminder: boolean = false;
+  @State private lastSampleText: string = '尚未采样';
+  @State private sourceLabel: string = '模拟采样';
+  @State private sourceDetail: string = '用于验证 UI、评分和提醒流程';
+  @State private permissionText: string = '相机权限待授权';
+  @State private isCameraPermissionGranted: boolean = false;
+  @State private cameraProbeText: string = '相机能力待检测';
+  @State private isCameraProbeAvailable: boolean = false;
+  @State private cameraPreviewSurfaceId: string = '';
+  @State private guardWindowText: string = '守护窗口待开启';
+  private timer: number = -1;
+  private hardReminderTimer: number = -1;
+  private guardRunId: number = 0;
+  private isSampling: boolean = false;
+  private lastSample?: PostureSample;
+  private sitCandidateKey: string = '';
+  private sitCandidateCount: number = 0;
+  private chinCandidateKey: string = '';
+  private chinCandidateCount: number = 0;
+  private mouthCandidateKey: string = '';
+  private mouthCandidateCount: number = 0;
+  private cameraPreviewController: XComponentController = new XComponentController();
+  private guardWindow: GuardWindowService = new GuardWindowService();
+  private reminder: ReminderEngine = new ReminderEngine();
+  private postureSource: PostureSource = new MockPostureSource();
+  aboutToAppear(): void {
+    if (!this.loaded) {
+      this.loadData();
+    }
+  }
+  aboutToDisappear(): void {
+    this.stopGuard();
+  }
+  private abilityContext(): common.UIAbilityContext | undefined {
+    const hostContext = this.getUIContext().getHostContext();
+    if (hostContext) {
+      return hostContext as common.UIAbilityContext;
+    }
+    return undefined;
+  }
+  private async loadData(): Promise<void> {
+    const context = this.abilityContext();
+    if (context) {
+      const data = await PostureSessionStore.load(context);
+      this.applyData(data);
+    } else {
+      this.applyData(createDefaultData());
+    }
+    this.loaded = true;
+  }
+  private applyData(data: AppData): void {
+    this.settings = this.copySettings(data.settings);
+    this.records = data.records.slice();
+  }
+  private copySettings(settings: UserSettings): UserSettings {
+    return {
+      profile: {
+        neutralNeckAngle: settings.profile.neutralNeckAngle,
+        neutralShoulderTilt: settings.profile.neutralShoulderTilt,
+        neutralPitch: settings.profile.neutralPitch,
+        neutralRoll: settings.profile.neutralRoll,
+        neutralYaw: settings.profile.neutralYaw,
+        neutralMouthRatio: settings.profile.neutralMouthRatio,
+        neutralFaceCenterY: settings.profile.neutralFaceCenterY,
+        neutralFaceHeight: settings.profile.neutralFaceHeight,
+        neutralFaceArea: settings.profile.neutralFaceArea,
+        neutralShoulderMidY: settings.profile.neutralShoulderMidY,
+        neutralShoulderWidth: settings.profile.neutralShoulderWidth,
+        neutralNoseToShoulderRatio: settings.profile.neutralNoseToShoulderRatio,
+        calibratedAt: settings.profile.calibratedAt,
+        sensitivity: settings.profile.sensitivity,
+        sampleIntervalMs: settings.profile.sampleIntervalMs
+      },
+      useCoreVision: settings.useCoreVision,
+      privacyMode: settings.privacyMode,
+      gentleSound: settings.gentleSound,
+      vibration: settings.vibration
+    };
+  }
+  private persistData(): void {
+    const context = this.abilityContext();
+    if (!context) {
+      return;
+    }
+    const data: AppData = {
+      settings: this.copySettings(this.settings),
+      records: this.records.slice(),
+      lastUpdatedAt: Date.now()
+    };
+    PostureSessionStore.save(context, data);
+  }
+  private async startGuard(): Promise<void> {
+    if (this.isGuarding || this.isStartingGuard) {
+      return;
+    }
+    this.isStartingGuard = true;
+    this.guardRunId += 1;
+    const runId = this.guardRunId;
+    try {
+      if (this.settings.useCoreVision) {
+        if (this.cameraPreviewSurfaceId.length === 0) {
+          this.summary = '预览未就绪';
+          this.reminderText = '预览 surface 未创建';
+          this.sourceDetail = '真实相机需要预览 surface 后才能拍照抽帧';
+          return;
+        }
+        const permissionGranted = await this.ensureCameraPermission();
+        if (!permissionGranted) {
+          this.summary = '需要相机权限';
+          this.reminderText = '权限未授权';
+          return;
+        }
+        const cameraReady = this.probeCamera();
+        if (!cameraReady) {
+          this.summary = '相机不可用';
+          this.reminderText = '相机预检失败';
+          return;
+        }
+      } else {
+        this.permissionText = '模拟采样无需相机权限';
+        this.cameraProbeText = '模拟采样未占用相机';
+        this.isCameraPermissionGranted = false;
+        this.isCameraProbeAvailable = false;
+      }
+      await this.rebuildPostureSource();
+      if (runId !== this.guardRunId) {
+        await this.postureSource.dispose();
+        this.syncSourceStatus();
+        return;
+      }
+      const context = this.abilityContext();
+      if (context) {
+        await this.guardWindow.enter(context);
+        this.guardWindowText = this.guardWindow.statusDetail();
+      }
+      if (runId !== this.guardRunId) {
+        await this.postureSource.dispose();
+        this.syncSourceStatus();
+        return;
+      }
+      this.isGuarding = true;
+      this.reminder.reset();
+      this.resetDisplayStability();
+      this.resetReminderState('暂无提醒');
+      if (this.timer >= 0) {
+        clearInterval(this.timer);
+        this.timer = -1;
+      }
+      this.captureFrame();
+      this.timer = setInterval(() => {
+        this.captureFrame();
+      }, this.settings.profile.sampleIntervalMs);
+    } finally {
+      if (runId === this.guardRunId) {
+        this.isStartingGuard = false;
+      }
+    }
+  }
+  private async stopGuard(): Promise<void> {
+    this.guardRunId += 1;
+    this.isStartingGuard = false;
+    if (this.timer >= 0) {
+      clearInterval(this.timer);
+      this.timer = -1;
+    }
+    this.isGuarding = false;
+    this.resetDisplayStability();
+    this.resetReminderState('守护已暂停');
+    await this.postureSource.dispose();
+    this.isSampling = false;
+    await this.guardWindow.leave(this.abilityContext());
+    this.guardWindowText = this.guardWindow.statusDetail();
+    this.syncSourceStatus();
+  }
+  private async ensureCameraPermission(): Promise<boolean> {
+    const context = this.abilityContext();
+    if (!context) {
+      this.permissionText = '无法获取权限上下文';
+      this.isCameraPermissionGranted = false;
+      return false;
+    }
+    try {
+      const manager = abilityAccessCtrl.createAtManager();
+      const result = await manager.requestPermissionsFromUser(context, [CAMERA_PERMISSION]);
+      const granted = result.authResults.length > 0 &&
+        result.authResults[0] === abilityAccessCtrl.GrantStatus.PERMISSION_GRANTED;
+      this.isCameraPermissionGranted = granted;
+      this.permissionText = granted ? '相机权限已授权' : '相机权限未授权';
+      return granted;
+    } catch (error) {
+      this.permissionText = '相机权限请求失败';
+      this.isCameraPermissionGranted = false;
+      return false;
+    }
+  }
+  private probeCamera(): boolean {
+    const context = this.abilityContext();
+    if (!context) {
+      this.cameraProbeText = '无法获取相机上下文';
+      this.isCameraProbeAvailable = false;
+      return false;
+    }
+    const result: CameraProbeResult = CameraProbeService.probe(context);
+    this.isCameraProbeAvailable = result.available;
+    if (result.available) {
+      this.cameraProbeText = (result.hasFrontCamera ? '前置摄像头可用' : '未找到前置，使用默认摄像头') +
+        ' · ' + result.detail;
+    } else {
+      this.cameraProbeText = result.detail;
+    }
+    return result.available;
+  }
+  private async captureFrame(force: boolean = false): Promise<void> {
+    if (!force && !this.isGuarding) {
+      return;
+    }
+    if (this.isSampling) {
+      return;
+    }
+    const runId = this.guardRunId;
+    this.isSampling = true;
+    try {
+      const sample = await this.postureSource.sample(this.settings.profile);
+      if (!force && (!this.isGuarding || runId !== this.guardRunId)) {
+        return;
+      }
+      this.lastSample = sample;
+      const result = evaluatePosture(sample, this.settings.profile);
+      const action = this.reminder.feed(result, Date.now());
+      result.action = action;
+      result.primaryAlert = action === ReminderAction.NONE ? result.primaryAlert : this.reminder.alertType();
+      this.applyResult(result);
+      this.appendRecord(result);
+      this.syncSourceStatus();
+    } catch (error) {
+      if (!force && (!this.isGuarding || runId !== this.guardRunId)) {
+        return;
+      }
+      this.summary = '采样失败';
+      this.reminderText = '检测源异常';
+      this.syncSourceStatus();
+    } finally {
+      this.isSampling = false;
+    }
+  }
+  private metricSeverity(level: PostureLevel): number {
+    if (level === PostureLevel.BAD) {
+      return 3;
+    }
+    if (level === PostureLevel.WARN) {
+      return 2;
+    }
+    if (level === PostureLevel.GOOD) {
+      return 1;
+    }
+    return 0;
+  }
+  private metricKey(level: PostureLevel, label: string, alertType: PostureAlertType): string {
+    return level + '|' + label + '|' + alertType;
+  }
+  private candidateKeyFor(type: DisplayMetricType): string {
+    if (type === DisplayMetricType.SIT) {
+      return this.sitCandidateKey;
+    }
+    if (type === DisplayMetricType.CHIN) {
+      return this.chinCandidateKey;
+    }
+    return this.mouthCandidateKey;
+  }
+  private candidateCountFor(type: DisplayMetricType): number {
+    if (type === DisplayMetricType.SIT) {
+      return this.sitCandidateCount;
+    }
+    if (type === DisplayMetricType.CHIN) {
+      return this.chinCandidateCount;
+    }
+    return this.mouthCandidateCount;
+  }
+  private setCandidate(type: DisplayMetricType, key: string, count: number): void {
+    if (type === DisplayMetricType.SIT) {
+      this.sitCandidateKey = key;
+      this.sitCandidateCount = count;
+      return;
+    }
+    if (type === DisplayMetricType.CHIN) {
+      this.chinCandidateKey = key;
+      this.chinCandidateCount = count;
+      return;
+    }
+    this.mouthCandidateKey = key;
+    this.mouthCandidateCount = count;
+  }
+  private resetDisplayStability(): void {
+    this.sitCandidateKey = '';
+    this.sitCandidateCount = 0;
+    this.chinCandidateKey = '';
+    this.chinCandidateCount = 0;
+    this.mouthCandidateKey = '';
+    this.mouthCandidateCount = 0;
+  }
+  private shouldAdoptMetric(
+    type: DisplayMetricType,
+    nextKey: string,
+    nextLevel: PostureLevel,
+    currentKey: string,
+    currentLevel: PostureLevel
+  ): boolean {
+    const nextSeverity = this.metricSeverity(nextLevel);
+    const currentSeverity = this.metricSeverity(currentLevel);
+    if (nextKey === currentKey || nextSeverity < currentSeverity || nextLevel === PostureLevel.GOOD) {
+      this.setCandidate(type, '', 0);
+      return true;
+    }
+
+    const candidateCount = this.candidateKeyFor(type) === nextKey ? this.candidateCountFor(type) + 1 : 1;
+    this.setCandidate(type, nextKey, candidateCount);
+    return candidateCount >= DISPLAY_STABLE_FRAMES;
+  }
+  private displaySummary(): string {
+    if (this.score >= 88 && this.sitLevel !== PostureLevel.BAD && this.chinLevel !== PostureLevel.BAD &&
+      this.mouthLevel !== PostureLevel.BAD) {
+      return '坐姿在线';
+    }
+    if (this.sitLevel === PostureLevel.BAD) {
+      return this.sitLabel;
+    }
+    if (this.chinLevel === PostureLevel.BAD) {
+      return this.chinLabel;
+    }
+    if (this.mouthLevel === PostureLevel.BAD) {
+      return this.mouthLabel;
+    }
+    if (this.score >= 72) {
+      return '稍微调整一下';
+    }
+    return '坐直了';
+  }
+  private applyResult(result: PostureResult): void {
+    const useSit = this.shouldAdoptMetric(
+      DisplayMetricType.SIT,
+      this.metricKey(result.sit.level, result.sit.label, result.sit.alertType),
+      result.sit.level,
+      this.metricKey(this.sitLevel, this.sitLabel, this.sitAlertType()),
+      this.sitLevel
+    );
+    const useChin = this.shouldAdoptMetric(
+      DisplayMetricType.CHIN,
+      this.metricKey(result.chin.level, result.chin.label, result.chin.alertType),
+      result.chin.level,
+      this.metricKey(this.chinLevel, this.chinLabel,
+        this.chinLevel === PostureLevel.GOOD ? PostureAlertType.NONE : PostureAlertType.HEAD_DROP),
+      this.chinLevel
+    );
+    const useMouth = this.shouldAdoptMetric(
+      DisplayMetricType.MOUTH,
+      this.metricKey(result.mouth.level, result.mouth.label, result.mouth.alertType),
+      result.mouth.level,
+      this.metricKey(this.mouthLevel, this.mouthLabel,
+        this.mouthLevel === PostureLevel.GOOD ? PostureAlertType.NONE : PostureAlertType.MOUTH_OPEN),
+      this.mouthLevel
+    );
+    this.score = result.score;
+    if (useSit) {
+      this.applySitMetric(result.sit);
+    }
+    if (useChin) {
+      this.applyChinMetric(result.chin);
+    }
+    if (useMouth) {
+      this.applyMouthMetric(result.mouth);
+    }
+    this.summary = this.displaySummary();
+    if (result.action !== ReminderAction.NONE) {
+      this.reminderAction = result.action;
+      this.reminderAlertType = result.primaryAlert;
+      this.reminderMessage = this.reminderCopy(result.action, result.primaryAlert);
+      this.notifyReminder(result.action);
+      if (result.action === ReminderAction.HARD) {
+        this.showHardReminder = true;
+        this.scheduleHardReminderDismiss();
+      }
+    } else if (result.activeAlerts.length === 0 && this.reminderAction !== ReminderAction.HARD) {
+      this.reminderAction = ReminderAction.NONE;
+      this.reminderAlertType = PostureAlertType.NONE;
+      this.reminderMessage = '';
+    }
+    this.reminderText = this.reminderAction === ReminderAction.NONE ?
+      actionLabel(result.action, result.primaryAlert) :
+      actionLabel(this.reminderAction, this.reminderAlertType);
+    this.lastSampleText = this.formatClock(result.timestamp);
+  }
+  private applySitMetric(metric: MetricResult): void {
+    this.sitLevel = metric.level;
+    this.sitLabel = metric.label;
+    this.sitValue = Math.round(metric.value);
+  }
+  private applyChinMetric(metric: MetricResult): void {
+    this.chinLevel = metric.level;
+    this.chinLabel = metric.label;
+    this.chinValue = Math.round(metric.value);
+  }
+  private applyMouthMetric(metric: MetricResult): void {
+    this.mouthLevel = metric.level;
+    this.mouthLabel = metric.label;
+    this.mouthValue = Math.round(metric.value * 100) / 100;
+  }
+  private appendRecord(result: PostureResult): void {
+    const record: SessionRecord = {
+      timestamp: result.timestamp,
+      score: result.score,
+      sitLevel: result.sit.level,
+      chinLevel: result.chin.level,
+      mouthLevel: result.mouth.level,
+      action: result.action,
+      alertType: result.primaryAlert
+    };
+    const next = [record].concat(this.records);
+    this.records = next.slice(0, 1200);
+    this.persistData();
+  }
+  private async calibrateFromCurrent(): Promise<void> {
+    if (this.isSampling) {
+      return;
+    }
+    if (this.isGuarding) {
+      await this.stopGuard();
+    }
+    if (this.settings.useCoreVision) {
+      if (this.cameraPreviewSurfaceId.length === 0) {
+        this.summary = '预览未就绪';
+        this.reminderText = '预览 surface 未创建';
+        return;
+      }
+      const permissionGranted = await this.ensureCameraPermission();
+      if (!permissionGranted) {
+        this.summary = '需要相机权限';
+        this.reminderText = '权限未授权';
+        return;
+      }
+      const cameraReady = this.probeCamera();
+      if (!cameraReady) {
+        this.summary = '相机不可用';
+        this.reminderText = '相机预检失败';
+        return;
+      }
+    }
+
+    this.isSampling = true;
+    const samples: PostureSample[] = [];
+    try {
+      for (let second = CALIBRATION_COUNTDOWN_SECONDS; second > 0; second -= 1) {
+        this.summary = second.toString() + '秒后开始校准，请摆好健康姿势';
+        this.reminderText = '准备记录健康坐姿基线';
+        await this.sleep(CALIBRATION_COUNTDOWN_DELAY_MS);
+      }
+      await this.rebuildPostureSource();
+      for (let index = 0; index < CALIBRATION_FRAME_COUNT; index += 1) {
+        this.summary = '开始校准，别乱动哦，' + (index + 1).toString() + '/' + CALIBRATION_FRAME_COUNT.toString();
+        this.reminderText = '正在记录健康坐姿基线';
+        const sample = await this.postureSource.sample(this.settings.profile);
+        this.lastSample = sample;
+        samples.push(sample);
+        if (index < CALIBRATION_FRAME_COUNT - 1) {
+          await this.sleep(CALIBRATION_SAMPLE_DELAY_MS);
+        }
+      }
+      const next = this.copySettings(this.settings);
+      next.profile = buildCalibrationProfile(samples, this.settings.profile);
+      this.settings = next;
+      this.summary = '已记录当前基线';
+      this.lastSampleText = this.formatClock(next.profile.calibratedAt);
+      this.persistData();
+    } catch (error) {
+      this.summary = '校准失败';
+      this.reminderText = '请确认人脸和上半身在画面内';
+    } finally {
+      await this.postureSource.dispose();
+      this.postureSource = this.createPostureSource();
+      this.syncSourceStatus();
+      this.isSampling = false;
+    }
+  }
+  private resetCalibration(): void {
+    const defaults = createDefaultSettings();
+    const next = this.copySettings(this.settings);
+    next.profile.neutralNeckAngle = defaults.profile.neutralNeckAngle;
+    next.profile.neutralShoulderTilt = defaults.profile.neutralShoulderTilt;
+    next.profile.neutralPitch = defaults.profile.neutralPitch;
+    next.profile.neutralRoll = defaults.profile.neutralRoll;
+    next.profile.neutralYaw = defaults.profile.neutralYaw;
+    next.profile.neutralMouthRatio = defaults.profile.neutralMouthRatio;
+    next.profile.neutralFaceCenterY = defaults.profile.neutralFaceCenterY;
+    next.profile.neutralFaceHeight = defaults.profile.neutralFaceHeight;
+    next.profile.neutralFaceArea = defaults.profile.neutralFaceArea;
+    next.profile.neutralShoulderMidY = defaults.profile.neutralShoulderMidY;
+    next.profile.neutralShoulderWidth = defaults.profile.neutralShoulderWidth;
+    next.profile.neutralNoseToShoulderRatio = defaults.profile.neutralNoseToShoulderRatio;
+    next.profile.calibratedAt = defaults.profile.calibratedAt;
+    this.settings = next;
+    this.summary = '已恢复默认基线';
+    this.persistData();
+  }
+  private setSensitivity(value: number): void {
+    const next = this.copySettings(this.settings);
+    next.profile.sensitivity = value;
+    this.settings = next;
+    this.reminder.reset();
+    this.resetDisplayStability();
+    this.resetReminderState('已切换为' + this.sensitivityLabel(value));
+    this.persistData();
+  }
+  private async setIntervalMs(value: number): Promise<void> {
+    const next = this.copySettings(this.settings);
+    next.profile.sampleIntervalMs = value;
+      this.settings = next;
+      if (this.isGuarding) {
+        await this.stopGuard();
+        await this.startGuard();
+    } else {
+      this.persistData();
+    }
+  }
+  private async toggleCoreVision(): Promise<void> {
+    if (this.isGuarding) {
+      await this.stopGuard();
+    }
+    const next = this.copySettings(this.settings);
+    next.useCoreVision = !next.useCoreVision;
+    const defaults = createDefaultSettings();
+    const sensitivity = next.profile.sensitivity;
+    const sampleIntervalMs = next.profile.sampleIntervalMs;
+    next.profile = defaults.profile;
+    next.profile.sensitivity = sensitivity;
+    next.profile.sampleIntervalMs = sampleIntervalMs;
+    this.settings = next;
+    this.lastSample = undefined;
+    this.lastSampleText = '尚未采样';
+    this.resetDisplayStability();
+    this.persistData();
+    await this.rebuildPostureSource();
+    this.summary = next.useCoreVision ? '真实检测待开启' : '模拟采样待开启';
+    this.reminderText = '已重置基线，请重新记录';
+  }
+  private togglePrivacy(): void {
+    const next = this.copySettings(this.settings);
+    next.privacyMode = !next.privacyMode;
+    this.settings = next;
+    this.persistData();
+  }
+  private toggleSound(): void {
+    const next = this.copySettings(this.settings);
+    next.gentleSound = !next.gentleSound;
+    this.settings = next;
+    this.persistData();
+  }
+  private toggleVibration(): void {
+    const next = this.copySettings(this.settings);
+    next.vibration = !next.vibration;
+    this.settings = next;
+    this.persistData();
+  }
+  private async clearData(): Promise<void> {
+    await this.stopGuard();
+    const context = this.abilityContext();
+    if (context) {
+      await PostureSessionStore.clear(context);
+    }
+    const defaults = createDefaultData();
+    this.settings = this.copySettings(defaults.settings);
+    this.records = [];
+    this.reminder.reset();
+    this.resetDisplayStability();
+    this.score = 92;
+    this.summary = '坐姿在线';
+    this.resetReminderState('暂无提醒');
+    this.lastSampleText = '尚未采样';
+    await this.rebuildPostureSource();
+  }
+  private async sampleOnce(): Promise<void> {
+    if (this.isGuarding) {
+      await this.captureFrame(true);
+      return;
+    }
+    await this.rebuildPostureSource();
+    await this.captureFrame(true);
+    await this.postureSource.dispose();
+    this.syncSourceStatus();
+  }
+  private createPostureSource(): PostureSource {
+    const context = this.abilityContext();
+    if (this.settings.useCoreVision && context) {
+      return new CoreVisionPostureSource(context, this.cameraPreviewSurfaceId);
+    }
+    return new MockPostureSource();
+  }
+  private async rebuildPostureSource(): Promise<void> {
+    await this.postureSource.dispose();
+    this.postureSource = this.createPostureSource();
+    this.syncSourceStatus();
+  }
+  private syncSourceStatus(): void {
+    const status = this.postureSource.status();
+    this.sourceLabel = status.label;
+    this.sourceDetail = status.detail;
+  }
+  private resetReminderState(text: string): void {
+    this.cancelHardReminderTimer();
+    this.stopReminderFeedback();
+    this.reminderText = text;
+    this.reminderAction = ReminderAction.NONE;
+    this.reminderAlertType = PostureAlertType.NONE;
+    this.reminderMessage = '';
+    this.showHardReminder = false;
+  }
+  private cancelHardReminderTimer(): void {
+    if (this.hardReminderTimer >= 0) {
+      clearTimeout(this.hardReminderTimer);
+      this.hardReminderTimer = -1;
+    }
+  }
+  private clearHardReminder(): void {
+    this.cancelHardReminderTimer();
+    this.showHardReminder = false;
+    if (this.reminderAction === ReminderAction.HARD) {
+      this.reminderAction = ReminderAction.NONE;
+      this.reminderAlertType = PostureAlertType.NONE;
+      this.reminderMessage = '';
+      this.reminderText = '无提醒';
+    }
+  }
+  private scheduleHardReminderDismiss(): void {
+    this.cancelHardReminderTimer();
+    this.hardReminderTimer = setTimeout(() => {
+      this.clearHardReminder();
+    }, HARD_REMINDER_TIMEOUT_MS);
+  }
+  private notifyReminder(action: ReminderAction): void {
+    ReminderFeedbackService.notify(action, this.settings.vibration);
+  }
+  private stopReminderFeedback(): void {
+    ReminderFeedbackService.stop();
+  }
+  private reminderCopy(action: ReminderAction, type: PostureAlertType): string {
+    if (type === PostureAlertType.BODY_SLIDE) {
+      return action === ReminderAction.HARD ? '已经持续往下滑了，坐直一下' : '你在往下滑了，坐直一下';
+    }
+    if (type === PostureAlertType.HEAD_DROP) {
+      return action === ReminderAction.HARD ? '低头时间有点久，抬一下头' : '抬一下头，看看远处';
+    }
+    if (type === PostureAlertType.KYPHOSIS) {
+      return action === ReminderAction.HARD ? '身体持续靠前，坐回椅背' : '身体有点靠前，坐回椅背';
+    }
+    if (type === PostureAlertType.SHOULDER_TILT) {
+      return action === ReminderAction.HARD ? '身体歪斜持续了，调整左右平衡' : '身体有点歪，调整左右平衡';
+    }
+    if (type === PostureAlertType.MOUTH_OPEN) {
+      return action === ReminderAction.HARD ? '嘴巴张开有点久，放松闭合' : '嘴巴张开了，放松闭合';
+    }
+    return action === ReminderAction.HARD ? '姿态偏离有点久，坐直一下' : '姿态有点偏了，坐直一下';
+  }
+  private todayStats(): TodayStats {
+    return computeTodayStats(this.records, this.settings.profile.sampleIntervalMs);
+  }
+  private recentBuckets(): HourBucket[] {
+    return buildRecentBuckets(this.records);
+  }
+  private recentRecords(): SessionRecord[] {
+    return this.records.slice(0, 6);
+  }
+  private formatClock(timestamp: number): string {
+    const date = new Date(timestamp);
+    return date.getHours().toString().padStart(2, '0') + ':' +
+      date.getMinutes().toString().padStart(2, '0') + ':' +
+      date.getSeconds().toString().padStart(2, '0');
+  }
+  private sleep(ms: number): Promise<void> {
+    return new Promise<void>((resolve: () => void) => {
+      setTimeout(resolve, ms);
+    });
+  }
+  private intervalLabel(ms: number): string {
+    if (ms === 2000) {
+      return '2 秒';
+    }
+    if (ms === 5000) {
+      return '5 秒';
+    }
+    return '3 秒';
+  }
+  private sensitivityLabel(value: number): string {
+    if (value > 1.05) {
+      return '灵敏';
+    }
+    return '标准';
+  }
+  build() {
+    if (!this.loaded) {
+      this.LoadingView()
+    } else {
+      Stack({ alignContent: Alignment.Bottom }) {
+        this.PageBody()
+        this.TabBar()
+        if (this.showHardReminder) {
+          this.HardReminderOverlay()
+        }
+      }
+      .width('100%')
+      .height('100%')
+      .backgroundColor(SOFT)
+    }
+  }
+  @Builder
+  private LoadingView() {
+    Column({ space: 10 }) {
+      Text('坐直了')
+        .fontSize(32)
+        .fontWeight(FontWeight.Bold)
+        .fontColor(INK)
+      Text('读取本地记录')
+        .fontSize(15)
+        .fontColor(MUTED)
+    }
+    .width('100%')
+    .height('100%')
+    .justifyContent(FlexAlign.Center)
+    .backgroundColor(SOFT)
+  }
+  @Builder
+  private PageBody() {
+    Scroll() {
+      Column({ space: 18 }) {
+        this.Header()
+        if (this.activeTab === 0) {
+          this.GuardPage()
+        } else if (this.activeTab === 1) {
+          this.StatsPage()
+        } else {
+          this.SettingsPage()
+        }
+      }
+      .width('100%')
+      .padding({ left: 18, right: 18, top: 18, bottom: 110 })
+    }
+    .width('100%')
+    .height('100%')
+  }
+  @Builder
+  private Header() {
+    Row() {
+      Column({ space: 4 }) {
+        Text('坐直了')
+          .fontSize(30)
+          .fontWeight(FontWeight.Bold)
+          .fontColor(INK)
+        Text(this.isGuarding ? '前台守护中' : '前台守护待开启')
+          .fontSize(13)
+          .fontColor(MUTED)
+      }
+      .alignItems(HorizontalAlign.Start)
+      .layoutWeight(1)
+      if (this.settings.useCoreVision) {
+        this.CameraSurfaceHost()
+      }
+      Text(this.isGuarding ? 'ON' : 'OFF')
+        .width(58)
+        .height(34)
+        .fontSize(14)
+        .fontWeight(FontWeight.Bold)
+        .fontColor(this.isGuarding ? '#FFFFFF' : MUTED)
+        .textAlign(TextAlign.Center)
+        .lineHeight(34)
+        .backgroundColor(this.isGuarding ? GREEN : '#E6EBE4')
+        .borderRadius(8)
+    }
+    .width('100%')
+  }
+  @Builder
+  private GuardPage() {
+    Column({ space: 14 }) {
+      this.ScorePanel()
+      this.MetricGrid()
+      this.GuardActions()
+      this.PrivacyBand()
+    }
+    .width('100%')
+  }
+  @Builder
+  private ScorePanel() {
+    Column({ space: 16 }) {
+      Row() {
+        Column({ space: 6 }) {
+          Text(this.summary)
+            .fontSize(24)
+            .fontWeight(FontWeight.Bold)
+            .fontColor(INK)
+          Text('上次采样 ' + this.lastSampleText + ' · ' + this.intervalLabel(this.settings.profile.sampleIntervalMs) + ' 抽帧')
+            .fontSize(13)
+            .fontColor(MUTED)
+          if (this.summary === '采样失败') {
+            Text(this.sourceDetail)
+              .fontSize(12)
+              .fontColor(RED)
+              .lineHeight(18)
+              .maxLines(3)
+          }
+        }
+        .alignItems(HorizontalAlign.Start)
+        .layoutWeight(1)
+        Text(this.score.toString())
+          .width(86)
+          .height(86)
+          .fontSize(38)
+          .fontWeight(FontWeight.Bold)
+          .fontColor('#FFFFFF')
+          .textAlign(TextAlign.Center)
+          .lineHeight(86)
+          .backgroundColor(scoreColor(this.score))
+          .borderRadius(8)
+      }
+      .width('100%')
+      Column({ space: 8 }) {
+        Row() {
+          Text('综合评分')
+            .fontSize(13)
+            .fontColor(MUTED)
+          Blank()
+          Text(this.reminderText)
+            .fontSize(13)
+            .fontWeight(FontWeight.Bold)
+            .fontColor(reminderColor(this.reminderAction))
+        }
+        .width('100%')
+        Row() {
+          Text('')
+            .height(10)
+            .width(this.score.toString() + '%')
+            .backgroundColor(scoreColor(this.score))
+            .borderRadius(5)
+        }
+        .width('100%')
+        .height(10)
+        .backgroundColor('#E4EAE2')
+        .borderRadius(5)
+      }
+      .width('100%')
+    }
+    .width('100%')
+    .padding(18)
+    .backgroundColor(SURFACE)
+    .borderRadius(8)
+    .border({ width: 1, color: LINE })
+  }
+  @Builder
+  private HardReminderOverlay() {
+    Column() {
+      Column({ space: 16 }) {
+        Text('坐直了')
+          .fontSize(26)
+          .fontWeight(FontWeight.Bold)
+          .fontColor(INK)
+        Text(this.reminderMessage)
+          .fontSize(18)
+          .fontWeight(FontWeight.Bold)
+          .fontColor(INK)
+          .textAlign(TextAlign.Center)
+          .lineHeight(26)
+          .maxLines(3)
+        Button('知道了')
+          .height(46)
+          .width('100%')
+          .fontSize(16)
+          .fontWeight(FontWeight.Bold)
+          .fontColor('#FFFFFF')
+          .backgroundColor(RED)
+          .borderRadius(8)
+          .onClick(() => {
+            this.clearHardReminder();
+          })
+      }
+      .width('82%')
+      .padding(22)
+      .alignItems(HorizontalAlign.Center)
+      .backgroundColor(SURFACE)
+      .borderRadius(8)
+      .shadow({ radius: 18, color: '#33000000', offsetY: 8 })
+    }
+    .width('100%')
+    .height('100%')
+    .justifyContent(FlexAlign.Center)
+    .alignItems(HorizontalAlign.Center)
+    .backgroundColor('#CC171B1A')
+    .zIndex(10)
+  }
+  @Builder
+  private MetricGrid() {
+    Row({ space: 10 }) {
+      this.MetricTile('坐姿', this.sitLevel, this.sitLabel, this.sitValue.toString() + '%')
+      this.MetricTile('抬头', this.chinLevel, this.chinLabel, this.chinValue.toString() + '°')
+      this.MetricTile('嘴巴', this.mouthLevel, this.mouthLabel, this.mouthValue.toString())
+    }
+    .width('100%')
+  }
+  @Builder
+  private MetricTile(title: string, level: PostureLevel, label: string, value: string) {
+    Column({ space: 6 }) {
+      Row() {
+        Text(title)
+          .fontSize(13)
+          .fontColor(MUTED)
+        Blank()
+        Text(levelText(level))
+          .width(48)
+          .height(26)
+          .fontSize(11)
+          .fontWeight(FontWeight.Bold)
+          .fontColor(levelColor(level))
+          .textAlign(TextAlign.Center)
+          .lineHeight(26)
+          .backgroundColor(levelSoftColor(level))
+          .borderRadius(8)
+      }
+      .width('100%')
+      Text(label)
+        .fontSize(15)
+        .fontWeight(FontWeight.Bold)
+        .fontColor(INK)
+        .maxLines(1)
+      Text(value)
+        .fontSize(13)
+        .fontColor(MUTED)
+    }
+    .height(92)
+    .layoutWeight(1)
+    .alignItems(HorizontalAlign.Start)
+    .padding(12)
+    .backgroundColor(SURFACE)
+    .borderRadius(8)
+    .border({ width: 1, color: LINE })
+  }
+  @Builder
+  private GuardActions() {
+    Column({ space: 10 }) {
+      Button(this.guardButtonText())
+        .height(52)
+        .width('100%')
+        .fontSize(18)
+        .fontWeight(FontWeight.Bold)
+        .fontColor('#FFFFFF')
+        .backgroundColor(this.isGuarding ? RED : GREEN)
+        .borderRadius(8)
+        .onClick(() => {
+          if (this.isStartingGuard) {
+            return;
+          }
+          if (this.isGuarding) {
+            this.stopGuard();
+          } else {
+            this.startGuard();
+          }
+        })
+      this.PostureInsightCard()
+      Row({ space: 10 }) {
+        Button('记录基线')
+          .height(44)
+          .layoutWeight(1)
+          .fontSize(15)
+          .fontWeight(FontWeight.Bold)
+          .fontColor(INK)
+          .backgroundColor(SURFACE)
+          .borderRadius(8)
+          .border({ width: 1, color: LINE })
+          .onClick(() => {
+            this.calibrateFromCurrent();
+          })
+        Button('抽样一次')
+          .height(44)
+          .layoutWeight(1)
+          .fontSize(15)
+          .fontWeight(FontWeight.Bold)
+          .fontColor(INK)
+          .backgroundColor(SURFACE)
+          .borderRadius(8)
+          .border({ width: 1, color: LINE })
+          .onClick(() => {
+            this.sampleOnce();
+          })
+      }
+      .width('100%')
+    }
+    .width('100%')
+  }
+  @Builder
+  private PostureInsightCard() {
+    Row({ space: 14 }) {
+      this.PostureDemoFigure()
+      Column({ space: 8 }) {
+        Row({ space: 8 }) {
+          Text('识别')
+            .width(42)
+            .height(26)
+            .fontSize(12)
+            .fontWeight(FontWeight.Bold)
+            .fontColor(this.postureToneColor())
+            .textAlign(TextAlign.Center)
+            .lineHeight(26)
+            .backgroundColor(this.postureSoftColor())
+            .borderRadius(8)
+          Text(this.postureInsightTitle())
+            .fontSize(18)
+            .fontWeight(FontWeight.Bold)
+            .fontColor(INK)
+            .maxLines(1)
+            .layoutWeight(1)
+        }
+        .width('100%')
+        Text(this.postureInsightAdvice())
+          .fontSize(14)
+          .fontColor(MUTED)
+          .lineHeight(20)
+          .maxLines(2)
+        Row({ space: 6 }) {
+          Text('坐姿')
+            .fontSize(12)
+            .fontColor(levelColor(this.sitLevel))
+            .fontWeight(FontWeight.Bold)
+          Text('·')
+            .fontSize(12)
+            .fontColor(MUTED)
+          Text('抬头')
+            .fontSize(12)
+            .fontColor(levelColor(this.chinLevel))
+            .fontWeight(FontWeight.Bold)
+          Text('·')
+            .fontSize(12)
+            .fontColor(MUTED)
+          Text('嘴巴')
+            .fontSize(12)
+            .fontColor(levelColor(this.mouthLevel))
+            .fontWeight(FontWeight.Bold)
+        }
+        .width('100%')
+      }
+      .alignItems(HorizontalAlign.Start)
+      .layoutWeight(1)
+    }
+    .height(148)
+    .width('100%')
+    .padding(12)
+    .backgroundColor(SURFACE)
+    .borderRadius(8)
+    .border({ width: 1, color: LINE })
+  }
+  @Builder
+  private PostureDemoFigure() {
+    Stack() {
+      Path({
+        width: 116,
+        height: 124,
+        commands: this.postureBackPath()
+      })
+        .fill('#00000000')
+        .stroke(this.postureSoftStrokeColor())
+        .strokeWidth(10)
+        .strokeLineCap(LineCapStyle.Round)
+      Path({
+        width: 116,
+        height: 124,
+        commands: this.postureSpinePath()
+      })
+        .fill('#00000000')
+        .stroke(this.postureToneColor())
+        .strokeWidth(8)
+        .strokeLineCap(LineCapStyle.Round)
+      Path({
+        width: 116,
+        height: 124,
+        commands: this.postureShoulderPath()
+      })
+        .fill('#00000000')
+        .stroke(this.postureToneColor())
+        .strokeWidth(5)
+        .strokeLineCap(LineCapStyle.Round)
+      Circle({ width: 28, height: 28 })
+        .fill(this.postureToneColor())
+        .position({ x: this.postureHeadX(), y: this.postureHeadY() })
+      Circle({ width: 10, height: 10 })
+        .fill(SURFACE)
+        .stroke(this.postureToneColor())
+        .strokeWidth(4)
+        .position({ x: this.postureNeckX(), y: this.postureNeckY() })
+      if (this.primaryPostureAlert() !== PostureAlertType.NONE) {
+        Text(this.postureCueSymbol())
+          .width(34)
+          .height(34)
+          .fontSize(26)
+          .fontWeight(FontWeight.Bold)
+          .fontColor(this.postureToneColor())
+          .textAlign(TextAlign.Center)
+          .lineHeight(34)
+          .position({ x: 78, y: 42 })
+      }
+    }
+    .width(116)
+    .height(124)
+    .backgroundColor(this.postureFigureBackground())
+    .borderRadius(8)
+  }
+  @Builder
+  private PrivacyBand() {
+    Column({ space: 8 }) {
+      Text('本机识别')
+        .fontSize(13)
+        .fontWeight(FontWeight.Bold)
+        .fontColor(GREEN)
+      Text(this.settings.useCoreVision ?
+        '图像帧只用于内存中的姿态判断；当前使用相机拍照抽帧并交给 Core Vision 检测。' :
+        '图像帧只用于内存中的姿态判断；当前使用模拟采样验证守护流程。')
+        .fontSize(14)
+        .fontColor(MUTED)
+        .lineHeight(20)
+      Text(this.permissionText)
+        .fontSize(13)
+        .fontWeight(FontWeight.Bold)
+        .fontColor(this.isCameraPermissionGranted ? GREEN : YELLOW)
+      Text(this.cameraProbeText)
+        .fontSize(13)
+        .fontWeight(FontWeight.Bold)
+        .fontColor(this.isCameraProbeAvailable ? GREEN : YELLOW)
+        .lineHeight(19)
+      Text(this.cameraPreviewSurfaceId.length > 0 ? '预览 surface 已就绪' : '预览 surface 待创建')
+        .fontSize(13)
+        .fontWeight(FontWeight.Bold)
+        .fontColor(this.cameraPreviewSurfaceId.length > 0 ? GREEN : YELLOW)
+        .lineHeight(19)
+      Text(this.guardWindowText)
+        .fontSize(13)
+        .fontWeight(FontWeight.Bold)
+        .fontColor(this.isGuarding ? GREEN : MUTED)
+        .lineHeight(19)
+      Text('当前检测源：' + this.sourceLabel + ' · ' + this.sourceDetail)
+        .fontSize(13)
+        .fontColor(MUTED)
+        .lineHeight(19)
+    }
+    .width('100%')
+    .padding(14)
+    .backgroundColor(GREEN_SOFT)
+    .borderRadius(8)
+    .border({ width: 1, color: '#CFE8D8' })
+  }
+  @Builder
+  private CameraSurfaceHost() {
+    XComponent({
+      id: 'zuozhile-camera-preview',
+      type: XComponentType.SURFACE,
+      controller: this.cameraPreviewController
+    })
+      .width(2)
+      .height(2)
+      .opacity(0.01)
+      .onLoad(() => {
+        this.cameraPreviewSurfaceId = this.cameraPreviewController.getXComponentSurfaceId();
+      })
+      .onDestroy(() => {
+        this.cameraPreviewSurfaceId = '';
+      })
+  }
+  private guardButtonText(): string {
+    if (this.isStartingGuard) {
+      return '启动中';
+    }
+    return this.isGuarding ? '结束守护' : '开始守护';
+  }
+  private primaryPostureAlert(): PostureAlertType {
+    if (this.sitLevel === PostureLevel.BAD) {
+      return this.sitAlertType();
+    }
+    if (this.chinLevel === PostureLevel.BAD) {
+      return PostureAlertType.HEAD_DROP;
+    }
+    if (this.mouthLevel === PostureLevel.BAD) {
+      return PostureAlertType.MOUTH_OPEN;
+    }
+    if (this.sitLevel === PostureLevel.WARN) {
+      return this.sitAlertType();
+    }
+    if (this.chinLevel === PostureLevel.WARN) {
+      return PostureAlertType.HEAD_DROP;
+    }
+    if (this.mouthLevel === PostureLevel.WARN) {
+      return PostureAlertType.MOUTH_OPEN;
+    }
+    return PostureAlertType.NONE;
+  }
+  private sitAlertType(): PostureAlertType {
+    if (this.sitLabel.indexOf('下滑') >= 0) {
+      return PostureAlertType.BODY_SLIDE;
+    }
+    if (this.sitLabel.indexOf('含胸') >= 0 || this.sitLabel.indexOf('前扣') >= 0) {
+      return PostureAlertType.KYPHOSIS;
+    }
+    if (this.sitLabel.indexOf('靠前') >= 0) {
+      return PostureAlertType.KYPHOSIS;
+    }
+    if (this.sitLabel.indexOf('歪') >= 0 || this.sitLabel.indexOf('不平') >= 0) {
+      return PostureAlertType.SHOULDER_TILT;
+    }
+    return this.sitLevel === PostureLevel.GOOD ? PostureAlertType.NONE : PostureAlertType.KYPHOSIS;
+  }
+  private postureInsightTitle(): string {
+    const alert = this.primaryPostureAlert();
+    if (alert === PostureAlertType.BODY_SLIDE) {
+      return '身体有点下滑';
+    }
+    if (alert === PostureAlertType.HEAD_DROP) {
+      return '低头趋势';
+    }
+    if (alert === PostureAlertType.KYPHOSIS) {
+      return this.sitLabel.indexOf('靠前') >= 0 ? '身体靠近屏幕' : '肩膀前扣';
+    }
+    if (alert === PostureAlertType.SHOULDER_TILT) {
+      return '左右不平';
+    }
+    if (alert === PostureAlertType.MOUTH_OPEN) {
+      return '嘴巴张开';
+    }
+    return '坐姿端正';
+  }
+  private postureInsightAdvice(): string {
+    const alert = this.primaryPostureAlert();
+    if (alert === PostureAlertType.BODY_SLIDE) {
+      return '把背靠回椅背，骨盆坐稳，别让身体继续往下滑。';
+    }
+    if (alert === PostureAlertType.HEAD_DROP) {
+      return '抬高下巴一点，让视线回到屏幕上缘附近。';
+    }
+    if (alert === PostureAlertType.KYPHOSIS) {
+      return this.sitLabel.indexOf('靠前') >= 0 ?
+        '身体坐回椅背，手臂可以向前操作，但胸口别跟着贴近屏幕。' :
+        '肩膀向后打开，胸口轻轻向上，别趴向屏幕。';
+    }
+    if (alert === PostureAlertType.SHOULDER_TILT) {
+      return '两侧肩膀放平，重心回到椅子中间。';
+    }
+    if (alert === PostureAlertType.MOUTH_OPEN) {
+      return '下颌放松，嘴唇自然闭合，鼻呼吸会更稳。';
+    }
+    return '保持屏幕略低于视线，肩膀放松，腰背自然伸展。';
+  }
+  private postureToneColor(): string {
+    const alert = this.primaryPostureAlert();
+    if (alert === PostureAlertType.NONE) {
+      return GREEN;
+    }
+    if (this.sitLevel === PostureLevel.BAD || this.chinLevel === PostureLevel.BAD ||
+      this.mouthLevel === PostureLevel.BAD) {
+      return RED;
+    }
+    return YELLOW;
+  }
+  private postureSoftColor(): string {
+    const alert = this.primaryPostureAlert();
+    if (alert === PostureAlertType.NONE) {
+      return GREEN_SOFT;
+    }
+    if (this.sitLevel === PostureLevel.BAD || this.chinLevel === PostureLevel.BAD ||
+      this.mouthLevel === PostureLevel.BAD) {
+      return RED_SOFT;
+    }
+    return YELLOW_SOFT;
+  }
+  private postureSoftStrokeColor(): string {
+    const alert = this.primaryPostureAlert();
+    if (alert === PostureAlertType.NONE) {
+      return '#BFE8D0';
+    }
+    if (this.sitLevel === PostureLevel.BAD || this.chinLevel === PostureLevel.BAD ||
+      this.mouthLevel === PostureLevel.BAD) {
+      return '#F3B3AA';
+    }
+    return '#F3D18C';
+  }
+  private postureFigureBackground(): string {
+    const alert = this.primaryPostureAlert();
+    if (alert === PostureAlertType.NONE) {
+      return '#F4FBF6';
+    }
+    if (this.sitLevel === PostureLevel.BAD || this.chinLevel === PostureLevel.BAD ||
+      this.mouthLevel === PostureLevel.BAD) {
+      return '#FFF1EE';
+    }
+    return '#FFF9EA';
+  }
+  private postureSpinePath(): string {
+    const alert = this.primaryPostureAlert();
+    if (alert === PostureAlertType.BODY_SLIDE) {
+      return 'M54 112 C48 88 50 62 62 40';
+    }
+    if (alert === PostureAlertType.HEAD_DROP) {
+      return 'M58 114 C54 88 60 60 82 42';
+    }
+    if (alert === PostureAlertType.KYPHOSIS) {
+      return 'M64 114 C46 88 50 60 84 42';
+    }
+    if (alert === PostureAlertType.SHOULDER_TILT) {
+      return 'M60 114 C54 88 58 60 72 38';
+    }
+    return 'M58 114 C56 88 58 60 66 36';
+  }
+  private postureBackPath(): string {
+    const alert = this.primaryPostureAlert();
+    if (alert === PostureAlertType.BODY_SLIDE) {
+      return 'M36 114 C28 86 36 58 62 38';
+    }
+    if (alert === PostureAlertType.HEAD_DROP) {
+      return 'M38 112 C30 84 44 56 80 36';
+    }
+    if (alert === PostureAlertType.KYPHOSIS) {
+      return 'M36 112 C26 84 42 56 84 36';
+    }
+    if (alert === PostureAlertType.SHOULDER_TILT) {
+      return 'M38 112 C32 84 46 56 72 36';
+    }
+    return 'M42 112 C38 84 44 56 64 34';
+  }
+  private postureShoulderPath(): string {
+    const alert = this.primaryPostureAlert();
+    if (alert === PostureAlertType.SHOULDER_TILT) {
+      return 'M38 64 L92 52';
+    }
+    if (alert === PostureAlertType.KYPHOSIS) {
+      return 'M48 66 L86 58';
+    }
+    return 'M40 64 L88 64';
+  }
+  private postureHeadX(): number {
+    const alert = this.primaryPostureAlert();
+    if (alert === PostureAlertType.BODY_SLIDE) {
+      return 44;
+    }
+    if (alert === PostureAlertType.HEAD_DROP || alert === PostureAlertType.KYPHOSIS) {
+      return 76;
+    }
+    if (alert === PostureAlertType.SHOULDER_TILT) {
+      return 68;
+    }
+    return 58;
+  }
+  private postureHeadY(): number {
+    const alert = this.primaryPostureAlert();
+    if (alert === PostureAlertType.BODY_SLIDE) {
+      return 26;
+    }
+    if (alert === PostureAlertType.HEAD_DROP || alert === PostureAlertType.KYPHOSIS) {
+      return 24;
+    }
+    return 18;
+  }
+  private postureNeckX(): number {
+    return this.postureHeadX() - 1;
+  }
+  private postureNeckY(): number {
+    return this.postureHeadY() + 27;
+  }
+  private postureCueSymbol(): string {
+    const alert = this.primaryPostureAlert();
+    if (alert === PostureAlertType.SHOULDER_TILT) {
+      return '↔';
+    }
+    if (alert === PostureAlertType.MOUTH_OPEN) {
+      return '·';
+    }
+    return '↑';
+  }
+  @Builder
+  private StatsPage() {
+    Column({ space: 14 }) {
+      this.TodaySummary()
+      this.HourChart()
+      this.RecentList()
+    }
+    .width('100%')
+  }
+  @Builder
+  private TodaySummary() {
+    Column({ space: 12 }) {
+      Row() {
+        Text('今日')
+          .fontSize(20)
+          .fontWeight(FontWeight.Bold)
+          .fontColor(INK)
+        Blank()
+        Text(this.todayStats().sampleCount.toString() + ' 次采样')
+          .fontSize(13)
+          .fontColor(MUTED)
+      }
+      .width('100%')
+      Row({ space: 10 }) {
+        StatTile({ label: '均分', value: this.todayStats().averageScore.toString(), color: scoreColor(this.todayStats().averageScore) })
+        StatTile({ label: '端正', value: this.todayStats().uprightMinutes.toString() + '分', color: GREEN })
+        StatTile({ label: '提醒', value: this.todayStats().remindCount.toString(), color: RED })
+      }
+      .width('100%')
+      Row({ space: 10 }) {
+        SmallCounter({ label: '正常', value: this.todayStats().uprightCount, color: GREEN })
+        SmallCounter({ label: '注意', value: this.todayStats().warnCount, color: YELLOW })
+        SmallCounter({ label: '纠正', value: this.todayStats().badCount, color: RED })
+      }
+      .width('100%')
+    }
+    .width('100%')
+    .padding(16)
+    .backgroundColor(SURFACE)
+    .borderRadius(8)
+    .border({ width: 1, color: LINE })
+  }
+  @Builder
+  private HourChart() {
+    Column({ space: 12 }) {
+      Text('最近时段')
+        .fontSize(20)
+        .fontWeight(FontWeight.Bold)
+        .fontColor(INK)
+        .width('100%')
+      Row({ space: 8 }) {
+        ForEach(this.recentBuckets(), (bucket: HourBucket) => {
+          Column({ space: 6 }) {
+            Stack({ alignContent: Alignment.Bottom }) {
+              Text('')
+                .width('100%')
+                .height(112)
+                .backgroundColor('#EDF2EA')
+                .borderRadius(8)
+              Text('')
+                .width('100%')
+                .height(Math.max(8, bucket.score))
+                .backgroundColor(scoreColor(bucket.score))
+                .borderRadius(8)
+            }
+            .height(112)
+            .width('100%')
+            Text(bucket.label)
+              .fontSize(10)
+              .fontColor(MUTED)
+              .maxLines(1)
+            Text(bucket.badRate.toString() + '%')
+              .fontSize(10)
+              .fontColor(bucket.badRate > 25 ? RED : MUTED)
+          }
+          .layoutWeight(1)
+        }, (bucket: HourBucket) => bucket.label)
+      }
+      .width('100%')
+    }
+    .width('100%')
+    .padding(16)
+    .backgroundColor(SURFACE)
+    .borderRadius(8)
+    .border({ width: 1, color: LINE })
+  }
+  @Builder
+  private RecentList() {
+    Column({ space: 10 }) {
+      Text('最近记录')
+        .fontSize(20)
+        .fontWeight(FontWeight.Bold)
+        .fontColor(INK)
+        .width('100%')
+      if (this.records.length === 0) {
+        Text('暂无记录')
+          .height(56)
+          .fontSize(15)
+          .fontColor(MUTED)
+          .textAlign(TextAlign.Center)
+          .width('100%')
+          .lineHeight(56)
+          .backgroundColor('#F9FAF7')
+          .borderRadius(8)
+      } else {
+        ForEach(this.recentRecords(), (record: SessionRecord) => {
+          Row() {
+            Text(this.formatClock(record.timestamp))
+              .width(68)
+              .fontSize(13)
+              .fontColor(MUTED)
+            Text(record.score.toString())
+              .width(44)
+              .fontSize(18)
+              .fontWeight(FontWeight.Bold)
+              .fontColor(scoreColor(record.score))
+            Text(levelText(record.sitLevel) + ' / ' + levelText(record.chinLevel))
+              .fontSize(13)
+              .fontColor(INK)
+              .layoutWeight(1)
+            Text(actionLabel(record.action, record.alertType ? record.alertType : PostureAlertType.NONE))
+              .fontSize(12)
+              .fontColor(reminderColor(record.action))
+          }
+          .height(44)
+          .width('100%')
+          .padding({ left: 10, right: 10 })
+          .backgroundColor('#F9FAF7')
+          .borderRadius(8)
+        }, (record: SessionRecord) => record.timestamp.toString())
+      }
+    }
+    .width('100%')
+    .padding(16)
+    .backgroundColor(SURFACE)
+    .borderRadius(8)
+    .border({ width: 1, color: LINE })
+  }
+  @Builder
+  private SettingsPage() {
+    Column({ space: 14 }) {
+      this.CalibrationPanel()
+      this.SamplingPanel()
+      this.PrivacyPanel()
+      Button('清空本机数据')
+        .height(48)
+        .width('100%')
+        .fontSize(16)
+        .fontWeight(FontWeight.Bold)
+        .fontColor(RED)
+        .backgroundColor(SURFACE)
+        .borderRadius(8)
+        .border({ width: 1, color: '#F0C9C5' })
+        .onClick(() => {
+          this.clearData();
+        })
+    }
+    .width('100%')
+  }
+  @Builder
+  private CalibrationPanel() {
+    Column({ space: 12 }) {
+      Text('校准')
+        .fontSize(20)
+        .fontWeight(FontWeight.Bold)
+        .fontColor(INK)
+        .width('100%')
+      Row({ space: 8 }) {
+        BaselineTile({ label: '颈角', value: this.settings.profile.neutralNeckAngle.toString() + '°' })
+        BaselineTile({ label: '俯仰', value: this.settings.profile.neutralPitch.toString() + '°' })
+        BaselineTile({ label: '肩宽', value: Math.round(this.settings.profile.neutralShoulderWidth).toString() })
+      }
+      .width('100%')
+      Row({ space: 10 }) {
+        Button('记录当前')
+          .height(44)
+          .layoutWeight(1)
+          .fontSize(15)
+          .fontWeight(FontWeight.Bold)
+          .fontColor('#FFFFFF')
+          .backgroundColor(BLUE)
+          .borderRadius(8)
+          .onClick(() => {
+            this.calibrateFromCurrent();
+          })
+        Button('恢复默认')
+          .height(44)
+          .layoutWeight(1)
+          .fontSize(15)
+          .fontWeight(FontWeight.Bold)
+          .fontColor(INK)
+          .backgroundColor('#F9FAF7')
+          .borderRadius(8)
+          .border({ width: 1, color: LINE })
+          .onClick(() => {
+            this.resetCalibration();
+          })
+      }
+      .width('100%')
+    }
+    .width('100%')
+    .padding(16)
+    .backgroundColor(SURFACE)
+    .borderRadius(8)
+    .border({ width: 1, color: LINE })
+  }
+  @Builder
+  private SamplingPanel() {
+    Column({ space: 12 }) {
+      Text('抽帧与灵敏度')
+        .fontSize(20)
+        .fontWeight(FontWeight.Bold)
+        .fontColor(INK)
+        .width('100%')
+      Row({ space: 8 }) {
+        this.SegmentButton('标准', STANDARD_SENSITIVITY)
+        this.SegmentButton('灵敏', SENSITIVE_SENSITIVITY)
+      }
+      .width('100%')
+      Row({ space: 8 }) {
+        this.IntervalButton(2000)
+        this.IntervalButton(3000)
+        this.IntervalButton(5000)
+      }
+      .width('100%')
+      Text('当前：' + this.sensitivityLabel(this.settings.profile.sensitivity) + ' · ' +
+        this.intervalLabel(this.settings.profile.sampleIntervalMs))
+        .fontSize(13)
+        .fontColor(MUTED)
+        .width('100%')
+    }
+    .width('100%')
+    .padding(16)
+    .backgroundColor(SURFACE)
+    .borderRadius(8)
+    .border({ width: 1, color: LINE })
+  }
+  @Builder
+  private SegmentButton(label: string, value: number) {
+    Row() {
+      Text(label)
+        .fontSize(14)
+        .fontWeight(FontWeight.Bold)
+        .fontColor(Math.abs(value - this.settings.profile.sensitivity) < 0.01 ? '#FFFFFF' : INK)
+      Blank()
+      Text(Math.abs(value - this.settings.profile.sensitivity) < 0.01 ? '已选' : '选择')
+        .fontSize(12)
+        .fontColor(Math.abs(value - this.settings.profile.sensitivity) < 0.01 ? '#FFFFFF' : MUTED)
+    }
+      .height(48)
+      .layoutWeight(1)
+      .padding({ left: 14, right: 14 })
+      .backgroundColor(Math.abs(value - this.settings.profile.sensitivity) < 0.01 ? BLUE : '#F9FAF7')
+      .borderRadius(8)
+      .border({ width: 1, color: Math.abs(value - this.settings.profile.sensitivity) < 0.01 ? BLUE : LINE })
+      .onClick(() => {
+        this.setSensitivity(value);
+      })
+  }
+  @Builder
+  private IntervalButton(value: number) {
+    Button(this.intervalLabel(value))
+      .height(42)
+      .layoutWeight(1)
+      .fontSize(14)
+      .fontWeight(FontWeight.Bold)
+      .fontColor(this.settings.profile.sampleIntervalMs === value ? '#FFFFFF' : INK)
+      .backgroundColor(this.settings.profile.sampleIntervalMs === value ? GREEN : '#F9FAF7')
+      .borderRadius(8)
+      .border({ width: 1, color: this.settings.profile.sampleIntervalMs === value ? GREEN : LINE })
+      .onClick(() => {
+        this.setIntervalMs(value);
+      })
+  }
+  @Builder
+  private PrivacyPanel() {
+    Column({ space: 10 }) {
+      Text('隐私与提醒')
+        .fontSize(20)
+        .fontWeight(FontWeight.Bold)
+        .fontColor(INK)
+        .width('100%')
+      this.CoreVisionSwitchRow()
+      this.PrivacySwitchRow()
+      this.SoundSwitchRow()
+      this.VibrationSwitchRow()
+    }
+    .width('100%')
+    .padding(16)
+    .backgroundColor(SURFACE)
+    .borderRadius(8)
+    .border({ width: 1, color: LINE })
+  }
+  @Builder
+  private CoreVisionSwitchRow() {
+    Row() {
+      Text('真实相机检测')
+        .fontSize(16)
+        .fontWeight(FontWeight.Bold)
+        .fontColor(INK)
+      Blank()
+      Button(this.settings.useCoreVision ? '开' : '关')
+        .width(48)
+        .height(30)
+        .fontSize(13)
+        .fontWeight(FontWeight.Bold)
+        .fontColor(this.settings.useCoreVision ? '#FFFFFF' : MUTED)
+        .backgroundColor(this.settings.useCoreVision ? GREEN : '#E6EBE4')
+        .borderRadius(8)
+        .onClick(() => {
+          this.toggleCoreVision();
+        })
+    }
+    .height(48)
+    .width('100%')
+    .padding({ left: 12, right: 10 })
+    .backgroundColor('#F9FAF7')
+    .borderRadius(8)
+  }
+  @Builder
+  private PrivacySwitchRow() {
+    Row() {
+      Text('本机隐私模式')
+        .fontSize(16)
+        .fontWeight(FontWeight.Bold)
+        .fontColor(INK)
+      Blank()
+      Button(this.settings.privacyMode ? '开' : '关')
+        .width(48)
+        .height(30)
+        .fontSize(13)
+        .fontWeight(FontWeight.Bold)
+        .fontColor(this.settings.privacyMode ? '#FFFFFF' : MUTED)
+        .backgroundColor(this.settings.privacyMode ? GREEN : '#E6EBE4')
+        .borderRadius(8)
+        .onClick(() => {
+          this.togglePrivacy();
+        })
+    }
+    .height(48)
+    .width('100%')
+    .padding({ left: 12, right: 10 })
+    .backgroundColor('#F9FAF7')
+    .borderRadius(8)
+  }
+  @Builder
+  private SoundSwitchRow() {
+    Row() {
+      Text('轻提示音')
+        .fontSize(16)
+        .fontWeight(FontWeight.Bold)
+        .fontColor(INK)
+      Blank()
+      Button(this.settings.gentleSound ? '开' : '关')
+        .width(48)
+        .height(30)
+        .fontSize(13)
+        .fontWeight(FontWeight.Bold)
+        .fontColor(this.settings.gentleSound ? '#FFFFFF' : MUTED)
+        .backgroundColor(this.settings.gentleSound ? GREEN : '#E6EBE4')
+        .borderRadius(8)
+        .onClick(() => {
+          this.toggleSound();
+        })
+    }
+    .height(48)
+    .width('100%')
+    .padding({ left: 12, right: 10 })
+    .backgroundColor('#F9FAF7')
+    .borderRadius(8)
+  }
+  @Builder
+  private VibrationSwitchRow() {
+    Row() {
+      Text('短振动')
+        .fontSize(16)
+        .fontWeight(FontWeight.Bold)
+        .fontColor(INK)
+      Blank()
+      Button(this.settings.vibration ? '开' : '关')
+        .width(48)
+        .height(30)
+        .fontSize(13)
+        .fontWeight(FontWeight.Bold)
+        .fontColor(this.settings.vibration ? '#FFFFFF' : MUTED)
+        .backgroundColor(this.settings.vibration ? GREEN : '#E6EBE4')
+        .borderRadius(8)
+        .onClick(() => {
+          this.toggleVibration();
+        })
+    }
+    .height(48)
+    .width('100%')
+    .padding({ left: 12, right: 10 })
+    .backgroundColor('#F9FAF7')
+    .borderRadius(8)
+  }
+  @Builder
+  private TabBar() {
+    Row({ space: 6 }) {
+      ForEach(TABS, (item: TabItem) => {
+        Button(item.label)
+          .height(52)
+          .layoutWeight(1)
+          .fontSize(15)
+          .fontWeight(FontWeight.Bold)
+          .fontColor(this.activeTab === item.index ? '#FFFFFF' : MUTED)
+          .backgroundColor(this.activeTab === item.index ? INK : '#EEF2EA')
+          .borderRadius(8)
+          .onClick(() => {
+            this.activeTab = item.index;
+          })
+      }, (item: TabItem) => item.label)
+    }
+    .width('100%')
+    .padding(10)
+    .margin({ left: 18, right: 18, bottom: 18 })
+    .backgroundColor('#FDFEFB')
+    .borderRadius(8)
+    .border({ width: 1, color: LINE })
+    .shadow({ radius: 12, color: '#1F000000', offsetY: 4 })
+  }
+}

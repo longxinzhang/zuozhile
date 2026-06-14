@@ -1,0 +1,24 @@
+{
+  "string": [
+    {
+      "name": "module_desc",
+      "value": "坐直了姿态守护模块"
+    },
+    {
+      "name": "EntryAbility_desc",
+      "value": "坐直了"
+    },
+    {
+      "name": "EntryAbility_label",
+      "value": "坐直了"
+    },
+    {
+      "name": "cam_reason",
+      "value": "用于前台守护时本机姿态识别，图像不保存、不上传。"
+    },
+    {
+      "name": "background_reason",
+      "value": "用于守护模式下保持前台长时任务活性。"
+    }
+  ]
+}
