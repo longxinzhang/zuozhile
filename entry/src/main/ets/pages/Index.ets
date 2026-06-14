@@ -155,7 +155,7 @@ struct Index {
   aboutToAppear(): void {
     this.pageRunId += 1;
     if (!this.loaded) {
-      this.loadData();
+      this.loadData(this.pageRunId);
     } else if (!this.isGuarding) {
       this.guardWindowText = this.guardWindow.statusDetail();
       this.syncIdleSourceStatus();
@@ -172,14 +172,20 @@ struct Index {
     }
     return undefined;
   }
-  private async loadData(): Promise<void> {
+  private async loadData(pageRunId: number): Promise<void> {
     const context = this.abilityContext();
     if (context) {
       const result = await PostureSessionStore.loadWithStatus(context);
+      if (!this.isCurrentPageRun(pageRunId)) {
+        return;
+      }
       this.applyData(result.data);
       this.setStorageStatus(result.isHealthy ? '本地数据已加载' : '本地数据读取失败，已使用默认数据',
         result.isHealthy);
     } else {
+      if (!this.isCurrentPageRun(pageRunId)) {
+        return;
+      }
       this.applyData(createDefaultData());
       this.setStorageStatus('本地存储不可用', false);
     }
