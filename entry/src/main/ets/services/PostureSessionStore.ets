@@ -3,6 +3,7 @@ import { preferences } from '@kit.ArkData';
 import {
   AppData,
   CalibrationProfile,
+  MAX_SESSION_RECORDS,
   PostureAlertType,
   PostureLevel,
   ReminderAction,
@@ -16,7 +17,6 @@ import {
 
 const STORE_NAME = 'zuozhile_session';
 const KEY_DATA = 'app_data';
-const MAX_RECORDS = 1200;
 
 function numberOr(value: number, fallback: number, min: number, max: number): number {
   if (!Number.isFinite(value)) {
@@ -64,7 +64,7 @@ function sanitizeSettings(settings: UserSettings): UserSettings {
   }
   return {
     profile: sanitizeProfile(settings.profile),
-    useCoreVision: settings.useCoreVision === true,
+    useCoreVision: settings.useCoreVision !== false,
     privacyMode: settings.privacyMode !== false,
     gentleSound: settings.gentleSound === true,
     vibration: settings.vibration !== false
@@ -130,7 +130,7 @@ function sanitizeData(data: AppData): AppData {
     return defaults;
   }
   const rawRecords = data.records ? data.records : [];
-  const records = rawRecords.map((record: SessionRecord) => sanitizeRecord(record)).slice(0, MAX_RECORDS);
+  const records = rawRecords.map((record: SessionRecord) => sanitizeRecord(record)).slice(0, MAX_SESSION_RECORDS);
   return {
     settings: sanitizeSettings(data.settings),
     records,

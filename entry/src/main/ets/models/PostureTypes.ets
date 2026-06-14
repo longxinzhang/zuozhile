@@ -13,6 +13,7 @@ export enum ReminderAction {
 
 export const STANDARD_SENSITIVITY = 0.9;
 export const SENSITIVE_SENSITIVITY = 1.2;
+export const MAX_SESSION_RECORDS = 1200;
 
 export enum PostureAlertType {
   NONE = 'none',

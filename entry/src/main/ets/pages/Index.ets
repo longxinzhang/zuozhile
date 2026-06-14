@@ -6,6 +6,7 @@ import { HourBucket, buildAlertBreakdown, buildRecentBuckets, computeTodayStats 
 import {
   AlertBreakdownItem,
   AppData,
+  MAX_SESSION_RECORDS,
   MetricResult,
   PostureAlertType,
   PostureLevel,
@@ -546,7 +547,7 @@ struct Index {
       alertType: result.primaryAlert
     };
     const next = [record].concat(this.records);
-    this.records = next.slice(0, 1200);
+    this.records = next.slice(0, MAX_SESSION_RECORDS);
     this.persistData();
   }
   private async calibrateFromCurrent(): Promise<void> {
