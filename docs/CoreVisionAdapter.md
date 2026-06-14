@@ -31,7 +31,7 @@
    - 不使用 `photo.main.size` 推导 JPEG 尺寸；该字段在压缩图上可能表现为
      `25165824x1` 这类元数据。实际解码尺寸来自 `ImageSource.getImageInfoSync()`。
    - `PhotoOutput.capture()` 直接失败时会清理 pending 回调状态并抛出阶段错误；等待
-     `photoAvailable` 超时仍走 6 秒超时保护。
+     `photoAvailable` 超时仍走 6 秒超时保护；错误回调如果附带 `Photo` 也会释放。
    - 解码后释放 `PixelMap`、`Photo`、`ImageSource`、`main`，不落盘。
 
 3. `CoreVisionPostureDetector.ets`

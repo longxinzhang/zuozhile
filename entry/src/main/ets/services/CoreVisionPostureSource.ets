@@ -49,7 +49,16 @@ export class CoreVisionPostureSource implements PostureSource {
   private lastDetail: string = '真实相机待启动';
   private photoCallback: PhotoCallback = (err: BusinessError, photo: camera.Photo): void => {
     if (err) {
+      if (photo) {
+        this.ignoreAsyncFailure(async () => {
+          await photo.release();
+        });
+      }
       this.rejectPending('拍照回调失败：' + errorSummary(err));
+      return;
+    }
+    if (!photo) {
+      this.rejectPending('拍照回调没有返回照片');
       return;
     }
     this.markStage('已收到照片回调');
