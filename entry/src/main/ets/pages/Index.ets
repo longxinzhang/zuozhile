@@ -233,25 +233,40 @@ struct Index {
     this.isStartingGuard = true;
     this.guardRunId += 1;
     const runId = this.guardRunId;
+    const pageRunId = this.pageRunId;
+    let guardWindowEntered = false;
     try {
       const sourceReady = await this.prepareSourceAccess();
-      if (!sourceReady) {
+      if (!this.isCurrentPageRun(pageRunId) || !sourceReady) {
         return;
       }
       await this.rebuildPostureSource();
-      if (runId !== this.guardRunId) {
+      if (!this.isCurrentPageRun(pageRunId) || runId !== this.guardRunId) {
         await this.postureSource.dispose();
-        this.syncSourceStatus();
+        if (this.isCurrentPageRun(pageRunId)) {
+          this.syncSourceStatus();
+        }
         return;
       }
       const context = this.abilityContext();
       if (context) {
         await this.guardWindow.enter(context);
-        this.guardWindowText = this.guardWindow.statusDetail();
+        guardWindowEntered = true;
+        if (this.isCurrentPageRun(pageRunId)) {
+          this.guardWindowText = this.guardWindow.statusDetail();
+        }
       }
-      if (runId !== this.guardRunId) {
+      if (!this.isCurrentPageRun(pageRunId) || runId !== this.guardRunId) {
+        if (guardWindowEntered) {
+          await this.guardWindow.leave(context);
+          if (this.isCurrentPageRun(pageRunId)) {
+            this.guardWindowText = this.guardWindow.statusDetail();
+          }
+        }
         await this.postureSource.dispose();
-        this.syncSourceStatus();
+        if (this.isCurrentPageRun(pageRunId)) {
+          this.syncSourceStatus();
+        }
         return;
       }
       this.isGuarding = true;
