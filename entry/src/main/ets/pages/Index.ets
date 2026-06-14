@@ -875,6 +875,18 @@ struct Index {
       date.getMinutes().toString().padStart(2, '0') + ':' +
       date.getSeconds().toString().padStart(2, '0');
   }
+  private formatDegree(value: number): string {
+    if (!Number.isFinite(value)) {
+      return '0.0°';
+    }
+    return (Math.round(value * 10) / 10).toFixed(1) + '°';
+  }
+  private formatBaselineWidth(value: number): string {
+    if (!Number.isFinite(value)) {
+      return '0';
+    }
+    return Math.round(value).toString();
+  }
   private sleep(ms: number): Promise<void> {
     return new Promise<void>((resolve: () => void) => {
       setTimeout(resolve, ms);
@@ -1985,9 +1997,9 @@ struct Index {
         .fontColor(INK)
         .width('100%')
       Row({ space: 8 }) {
-        BaselineTile({ label: '颈角', value: this.settings.profile.neutralNeckAngle.toString() + '°' })
-        BaselineTile({ label: '俯仰', value: this.settings.profile.neutralPitch.toString() + '°' })
-        BaselineTile({ label: '肩宽', value: Math.round(this.settings.profile.neutralShoulderWidth).toString() })
+        BaselineTile({ label: '颈角', value: this.formatDegree(this.settings.profile.neutralNeckAngle) })
+        BaselineTile({ label: '俯仰', value: this.formatDegree(this.settings.profile.neutralPitch) })
+        BaselineTile({ label: '肩宽', value: this.formatBaselineWidth(this.settings.profile.neutralShoulderWidth) })
       }
       .width('100%')
       Row({ space: 10 }) {
