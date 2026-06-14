@@ -102,6 +102,9 @@ export class ReminderEngine {
     }
 
     this.lastAlertType = selectedAction === ReminderAction.NONE ? PostureAlertType.NONE : selectedType;
+    if (selectedAction !== ReminderAction.NONE) {
+      this.markAlerted(selectedType, now);
+    }
     if (selectedAction !== ReminderAction.NONE && selectedType === PostureAlertType.ITEM_03) {
       this.item03AlertCount += 1;
     }
@@ -145,14 +148,19 @@ export class ReminderEngine {
     }
 
     if (rule.hardDurationMs >= 0 && held >= rule.hardDurationMs) {
-      state.lastAlertAt = now;
       return ReminderAction.HARD;
     }
     if (held >= rule.durationMs) {
-      state.lastAlertAt = now;
       return ReminderAction.SOFT;
     }
     return ReminderAction.NONE;
+  }
+
+  private markAlerted(type: PostureAlertType, now: number): void {
+    const state = this.states.find((item: AlertState) => item.type === type);
+    if (state) {
+      state.lastAlertAt = now;
+    }
   }
 }
 
