@@ -34,6 +34,10 @@ function numberOr(value: number, fallback: number, min: number, max: number): nu
   return value;
 }
 
+function timestampOr(value: number, fallback: number): number {
+  return numberOr(value, fallback, 0, 4102444800000);
+}
+
 function normalizeSensitivity(value: number, fallback: number): number {
   const safeValue = numberOr(value, fallback, 0.6, 1.4);
   return safeValue > 1.05 ? SENSITIVE_SENSITIVITY : STANDARD_SENSITIVITY;
@@ -71,7 +75,7 @@ function sanitizeProfile(profile: CalibrationProfile): CalibrationProfile {
     neutralShoulderMidY: numberOr(profile.neutralShoulderMidY, defaults.neutralShoulderMidY, 0, 10000),
     neutralShoulderWidth: numberOr(profile.neutralShoulderWidth, defaults.neutralShoulderWidth, 1, 10000),
     neutralNoseToShoulderRatio: numberOr(profile.neutralNoseToShoulderRatio, defaults.neutralNoseToShoulderRatio, -5, 5),
-    calibratedAt: numberOr(profile.calibratedAt, defaults.calibratedAt, 0, 4102444800000),
+    calibratedAt: timestampOr(profile.calibratedAt, defaults.calibratedAt),
     sensitivity: normalizeSensitivity(profile.sensitivity, defaults.sensitivity),
     sampleIntervalMs: normalizeSampleInterval(profile.sampleIntervalMs, defaults.sampleIntervalMs)
   };
@@ -133,8 +137,20 @@ function sanitizeAlertType(type: PostureAlertType): PostureAlertType {
 }
 
 function sanitizeRecord(record: SessionRecord): SessionRecord {
+  const now = Date.now();
+  if (!record) {
+    return {
+      timestamp: now,
+      score: 0,
+      sitLevel: PostureLevel.UNKNOWN,
+      chinLevel: PostureLevel.UNKNOWN,
+      mouthLevel: PostureLevel.UNKNOWN,
+      action: ReminderAction.NONE,
+      alertType: PostureAlertType.NONE
+    };
+  }
   return {
-    timestamp: typeof record.timestamp === 'number' ? record.timestamp : Date.now(),
+    timestamp: timestampOr(record.timestamp, now),
     score: numberOr(record.score, 0, 0, 100),
     sitLevel: sanitizeLevel(record.sitLevel),
     chinLevel: sanitizeLevel(record.chinLevel),
@@ -149,12 +165,12 @@ function sanitizeData(data: AppData): AppData {
   if (!data) {
     return defaults;
   }
-  const rawRecords = data.records ? data.records : [];
+  const rawRecords = Array.isArray(data.records) ? data.records : [];
   const records = rawRecords.map((record: SessionRecord) => sanitizeRecord(record)).slice(0, MAX_SESSION_RECORDS);
   return {
     settings: sanitizeSettings(data.settings),
     records,
-    lastUpdatedAt: typeof data.lastUpdatedAt === 'number' ? data.lastUpdatedAt : Date.now()
+    lastUpdatedAt: timestampOr(data.lastUpdatedAt, Date.now())
   };
 }
 
