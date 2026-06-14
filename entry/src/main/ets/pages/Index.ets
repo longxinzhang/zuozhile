@@ -887,6 +887,17 @@ struct Index {
     }
     return Math.round(value).toString();
   }
+  private formatCalibrationStatus(timestamp: number): string {
+    if (!Number.isFinite(timestamp) || timestamp <= 0) {
+      return '未记录个人基线';
+    }
+    const date = new Date(timestamp);
+    const month = (date.getMonth() + 1).toString().padStart(2, '0');
+    const day = date.getDate().toString().padStart(2, '0');
+    const time = date.getHours().toString().padStart(2, '0') + ':' +
+      date.getMinutes().toString().padStart(2, '0');
+    return '已记录个人基线 · ' + month + '/' + day + ' ' + time;
+  }
   private sleep(ms: number): Promise<void> {
     return new Promise<void>((resolve: () => void) => {
       setTimeout(resolve, ms);
@@ -2006,8 +2017,12 @@ struct Index {
         BaselineTile({ label: '肩宽', value: this.formatBaselineWidth(this.settings.profile.neutralShoulderWidth) })
       }
       .width('100%')
+      Text(this.formatCalibrationStatus(this.settings.profile.calibratedAt))
+        .fontSize(13)
+        .fontColor(MUTED)
+        .width('100%')
       Row({ space: 10 }) {
-        Button('记录当前')
+        Button('记录基线')
           .height(44)
           .layoutWeight(1)
           .fontSize(15)
