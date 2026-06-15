@@ -43,6 +43,7 @@ import {
   YELLOW,
   YELLOW_SOFT,
   levelColor,
+  BLUE_SOFT,
   levelSoftColor,
   levelText,
   reminderColor,
@@ -60,6 +61,19 @@ interface PostureGuideItem {
   subtitle: string;
 }
 
+interface DebugSubTabItem {
+  index: number;
+  label: string;
+}
+
+interface DebugCalibrationStepItem {
+  index: number;
+  title: string;
+  instruction: string;
+  expected: string;
+  guideId: number;
+}
+
 enum DisplayMetricType {
   SIT = 'sit',
   CHIN = 'chin',
@@ -70,7 +84,13 @@ const TABS: TabItem[] = [
   { index: 0, label: '守护' },
   { index: 1, label: '统计' },
   { index: 2, label: '指南' },
-  { index: 3, label: '设置' }
+  { index: 3, label: '调试' },
+  { index: 4, label: '设置' }
+];
+const DEBUG_TABS: DebugSubTabItem[] = [
+  { index: 0, label: '检测日志' },
+  { index: 1, label: '精度校准' },
+  { index: 2, label: '参数' }
 ];
 const GUIDE_ITEMS: PostureGuideItem[] = [
   { id: 1, title: '挺起来一点～', subtitle: '驼背了，背轻轻靠回椅背' },
@@ -85,6 +105,15 @@ const GUIDE_ITEMS: PostureGuideItem[] = [
   { id: 10, title: '屏幕抬高一点～', subtitle: '别总低头看屏幕' },
   { id: 11, title: '嘴巴轻合～', subtitle: '长时间张嘴要稍微放松闭合' },
   { id: 12, title: '呼吸一下～', subtitle: '坐久了，放松身体深呼吸' }
+];
+const DEBUG_CALIBRATION_STEPS: DebugCalibrationStepItem[] = [
+  { index: 1, title: '正确坐姿', instruction: '坐正，挺胸抬头，目视前方', expected: '不应触发提醒', guideId: 1 },
+  { index: 2, title: '低头', instruction: '低头，像平时看手机那样', expected: '抬头', guideId: 3 },
+  { index: 3, title: '下巴前探', instruction: '脖子往前探，下巴伸出去', expected: '下巴收', guideId: 5 },
+  { index: 4, title: '驼背', instruction: '放松肩膀，让背弯下来', expected: '挺起来', guideId: 1 },
+  { index: 5, title: '身体前倾', instruction: '上身往前倾，离开椅背', expected: '靠回椅背', guideId: 7 },
+  { index: 6, title: '身体歪斜', instruction: '身体往一侧歪一歪', expected: '坐正', guideId: 2 },
+  { index: 7, title: '头部偏斜', instruction: '肩膀不动，只把头歪向一边', expected: '头别歪', guideId: 6 }
 ];
 const CAMERA_PERMISSION: Permissions = 'ohos.permission.CAMERA';
 const CALIBRATION_FRAME_COUNT = 10;
@@ -110,6 +139,7 @@ const REPORT_ALERT_PRIORITY: PostureAlertType[] = [
 struct Index {
   @State private loaded: boolean = false;
   @State private activeTab: number = 0;
+  @State private activeDebugTab: number = 0;
   @State private isGuarding: boolean = false;
   @State private isStartingGuard: boolean = false;
   @State private isStoppingGuard: boolean = false;
@@ -154,6 +184,7 @@ struct Index {
   @State private sessionReportSummary: string = '';
   @State private sessionReportAdvice: string = '';
   @State private sessionReportScore: number = 0;
+  @State private debugFeedbackText: string = '';
   private timer: number = -1;
   private hardReminderTimer: number = -1;
   private guardRunId: number = 0;
@@ -1328,6 +1359,130 @@ struct Index {
   private recentLevelSummary(record: SessionRecord): string {
     return levelText(record.sitLevel) + '/' + levelText(record.chinLevel) + '/' + levelText(record.mouthLevel);
   }
+  private isSameDayTime(left: number, right: number): boolean {
+    const a = new Date(left);
+    const b = new Date(right);
+    return a.getFullYear() === b.getFullYear() && a.getMonth() === b.getMonth() && a.getDate() === b.getDate();
+  }
+  private debugTodayRecords(): SessionRecord[] {
+    const now = Date.now();
+    return this.records.filter((record: SessionRecord) => this.isSameDayTime(record.timestamp, now));
+  }
+  private debugTodayAlertRecords(): SessionRecord[] {
+    return this.debugTodayRecords().filter((record: SessionRecord) => record.alertType !== PostureAlertType.NONE);
+  }
+  private debugRecentDetectionRecords(): SessionRecord[] {
+    const alerts = this.records.filter((record: SessionRecord) => record.alertType !== PostureAlertType.NONE);
+    if (alerts.length > 0) {
+      return alerts.slice(0, 6);
+    }
+    return this.records.slice(0, 6);
+  }
+  private debugDetectionCountText(): string {
+    return this.debugTodayAlertRecords().length.toString() + ' 条';
+  }
+  private debugPendingText(): string {
+    return this.debugTodayAlertRecords().length.toString();
+  }
+  private debugAccuracyText(): string {
+    return '待标注';
+  }
+  private debugRecordTitle(record: SessionRecord): string {
+    const type = record.alertType ? record.alertType : PostureAlertType.NONE;
+    if (type !== PostureAlertType.NONE) {
+      return alertTypeLabel(type);
+    }
+    return '未触发提醒';
+  }
+  private debugRecordReason(record: SessionRecord): string {
+    const type = record.alertType ? record.alertType : PostureAlertType.NONE;
+    if (type !== PostureAlertType.NONE) {
+      return alertTypeSubtitle(type);
+    }
+    return '本帧未达到提醒阈值，记录为普通采样。';
+  }
+  private debugRecordTone(record: SessionRecord): string {
+    const type = record.alertType ? record.alertType : PostureAlertType.NONE;
+    if (type !== PostureAlertType.NONE) {
+      return this.alertBreakdownColor(type);
+    }
+    return GREEN;
+  }
+  private markDebugFeedback(record: SessionRecord, isCorrect: boolean): void {
+    this.debugFeedbackText = this.formatClock(record.timestamp) + ' · ' +
+      this.debugRecordTitle(record) + ' · ' + (isCorrect ? '判定正确' : '提醒有误');
+  }
+  private debugSampleConfidenceText(): string {
+    if (!this.lastSample) {
+      return '暂无';
+    }
+    return Math.round(this.lastSample.face.confidence * 100).toString() + '%';
+  }
+  private debugPointStatusText(): string {
+    if (!this.lastSample) {
+      return '暂无关键点';
+    }
+    const skeleton = this.lastSample.skeleton;
+    let count = 0;
+    if (skeleton.nose) {
+      count += 1;
+    }
+    if (skeleton.leftShoulder) {
+      count += 1;
+    }
+    if (skeleton.rightShoulder) {
+      count += 1;
+    }
+    if (skeleton.leftHip) {
+      count += 1;
+    }
+    if (skeleton.rightHip) {
+      count += 1;
+    }
+    return count.toString() + '/5 关键点';
+  }
+  private debugFacePoseText(): string {
+    if (!this.lastSample) {
+      return '暂无姿态';
+    }
+    const face = this.lastSample.face;
+    return 'pitch ' + this.formatSignedNumber(face.pitch, 1) + '° · roll ' +
+      this.formatSignedNumber(face.roll, 1) + '°';
+  }
+  private debugMouthText(): string {
+    if (!this.lastSample) {
+      return '暂无';
+    }
+    return (Math.round(this.lastSample.face.mouthOpenRatio * 100) / 100).toString();
+  }
+  private debugLastSampleTimeText(): string {
+    if (!this.lastSample) {
+      return '尚未采样';
+    }
+    return this.formatClock(this.lastSample.timestamp);
+  }
+  private formatSignedNumber(value: number, fraction: number): string {
+    if (!Number.isFinite(value)) {
+      return '0';
+    }
+    const scaled = Math.round(value * Math.pow(10, fraction)) / Math.pow(10, fraction);
+    return scaled > 0 ? '+' + scaled.toFixed(fraction) : scaled.toFixed(fraction);
+  }
+  private formatDebugNumber(value: number, fraction: number): string {
+    if (!Number.isFinite(value)) {
+      return '0';
+    }
+    return (Math.round(value * Math.pow(10, fraction)) / Math.pow(10, fraction)).toFixed(fraction);
+  }
+  private debugSensitivityScale(): number {
+    return Math.max(this.settings.profile.sensitivity, 0.6);
+  }
+  private debugHigherThreshold(base: number): number {
+    return base / this.debugSensitivityScale();
+  }
+  private debugCompressionThreshold(loss: number): number {
+    return 1 - loss / this.debugSensitivityScale();
+  }
   private formatClock(timestamp: number): string {
     const date = new Date(timestamp);
     return date.getHours().toString().padStart(2, '0') + ':' +
@@ -1433,6 +1588,8 @@ struct Index {
           this.StatsPage()
         } else if (this.activeTab === 2) {
           this.GuidePage()
+        } else if (this.activeTab === 3) {
+          this.DebugPage()
         } else {
           this.SettingsPage()
         }
@@ -2456,6 +2613,373 @@ struct Index {
     }
     .width('100%')
     .padding(16)
+    .backgroundColor(SURFACE)
+    .borderRadius(8)
+    .border({ width: 1, color: LINE })
+  }
+  @Builder
+  private DebugPage() {
+    Column({ space: 14 }) {
+      Row() {
+        Text('检测调试')
+          .fontSize(20)
+          .fontWeight(FontWeight.Bold)
+          .fontColor(INK)
+        Blank()
+        Text(this.debugLastSampleTimeText())
+          .fontSize(13)
+          .fontColor(MUTED)
+      }
+      .width('100%')
+      this.DebugSubTabs()
+      if (this.activeDebugTab === 0) {
+        this.DebugLogPage()
+      } else if (this.activeDebugTab === 1) {
+        this.DebugCalibrationPage()
+      } else {
+        this.DebugParametersPage()
+      }
+    }
+    .width('100%')
+  }
+  @Builder
+  private DebugSubTabs() {
+    Row({ space: 8 }) {
+      ForEach(DEBUG_TABS, (item: DebugSubTabItem) => {
+        Button(item.label)
+          .height(42)
+          .layoutWeight(1)
+          .fontSize(13)
+          .fontWeight(FontWeight.Bold)
+          .fontColor(this.activeDebugTab === item.index ? '#FFFFFF' : INK)
+          .backgroundColor(this.activeDebugTab === item.index ? BLUE : '#F9FAF7')
+          .borderRadius(8)
+          .border({ width: 1, color: this.activeDebugTab === item.index ? BLUE : LINE })
+          .onClick(() => {
+            this.activeDebugTab = item.index;
+          })
+      }, (item: DebugSubTabItem) => item.label)
+    }
+    .width('100%')
+  }
+  @Builder
+  private DebugLogPage() {
+    Column({ space: 12 }) {
+      this.DebugLogSummary()
+      if (this.debugFeedbackText.length > 0) {
+        Text('最近标注：' + this.debugFeedbackText)
+          .fontSize(13)
+          .fontWeight(FontWeight.Bold)
+          .fontColor(BLUE)
+          .lineHeight(19)
+          .width('100%')
+          .padding({ left: 12, right: 12, top: 8, bottom: 8 })
+          .backgroundColor(BLUE_SOFT)
+          .borderRadius(8)
+      }
+      if (this.records.length === 0) {
+        Text('暂无检测记录。开始守护后，这里会显示最近触发项和采样结果。')
+          .fontSize(14)
+          .fontColor(MUTED)
+          .lineHeight(20)
+          .width('100%')
+          .padding(14)
+          .backgroundColor(SURFACE)
+          .borderRadius(8)
+          .border({ width: 1, color: LINE })
+      } else {
+        ForEach(this.debugRecentDetectionRecords(), (record: SessionRecord) => {
+          this.DebugLogCard(record)
+        }, (record: SessionRecord) => record.timestamp.toString())
+      }
+    }
+    .width('100%')
+  }
+  @Builder
+  private DebugLogSummary() {
+    Column({ space: 12 }) {
+      Row() {
+        Text('检测日志')
+          .fontSize(20)
+          .fontWeight(FontWeight.Bold)
+          .fontColor(INK)
+        Blank()
+        Text('今日 ' + this.debugDetectionCountText())
+          .fontSize(13)
+          .fontColor(MUTED)
+      }
+      .width('100%')
+      Row({ space: 10 }) {
+        StatTile({ label: '准确率', value: this.debugAccuracyText(), color: BLUE })
+        StatTile({ label: '待标注', value: this.debugPendingText(), color: YELLOW })
+        StatTile({ label: '置信度', value: this.debugSampleConfidenceText(), color: GREEN })
+      }
+      .width('100%')
+      Row({ space: 10 }) {
+        SmallCounter({ label: '关键点', value: this.lastSample ? 1 : 0, color: GREEN })
+        SmallCounter({ label: '今日采样', value: this.debugTodayRecords().length, color: BLUE })
+        SmallCounter({ label: '提醒记录', value: this.debugTodayAlertRecords().length, color: RED })
+      }
+      .width('100%')
+      Text('最近帧：' + this.debugPointStatusText() + ' · ' + this.debugFacePoseText() +
+        ' · 嘴部 ' + this.debugMouthText())
+        .fontSize(13)
+        .fontColor(MUTED)
+        .lineHeight(19)
+        .width('100%')
+    }
+    .width('100%')
+    .padding(16)
+    .backgroundColor(SURFACE)
+    .borderRadius(8)
+    .border({ width: 1, color: LINE })
+  }
+  @Builder
+  private DebugLogCard(record: SessionRecord) {
+    Row({ space: 12 }) {
+      Stack() {
+        Text(record.score.toString())
+          .fontSize(20)
+          .fontWeight(FontWeight.Bold)
+          .fontColor('#FFFFFF')
+      }
+      .width(64)
+      .height(64)
+      .backgroundColor(scoreColor(record.score))
+      .borderRadius(8)
+      Column({ space: 6 }) {
+        Row({ space: 8 }) {
+          Text(this.formatClock(record.timestamp))
+            .fontSize(12)
+            .fontColor(MUTED)
+          Text(this.debugRecordTitle(record))
+            .fontSize(15)
+            .fontWeight(FontWeight.Bold)
+            .fontColor(INK)
+            .layoutWeight(1)
+            .maxLines(1)
+        }
+        .width('100%')
+        Text(this.debugRecordReason(record))
+          .fontSize(12)
+          .fontColor(MUTED)
+          .lineHeight(18)
+          .maxLines(2)
+          .width('100%')
+        Row({ space: 8 }) {
+          Text(this.recentLevelSummary(record))
+            .fontSize(12)
+            .fontWeight(FontWeight.Bold)
+            .fontColor(this.debugRecordTone(record))
+            .layoutWeight(1)
+          Button('正确')
+            .height(30)
+            .width(60)
+            .fontSize(12)
+            .fontWeight(FontWeight.Bold)
+            .fontColor('#FFFFFF')
+            .backgroundColor(GREEN)
+            .borderRadius(8)
+            .onClick(() => {
+              this.markDebugFeedback(record, true);
+            })
+          Button('有误')
+            .height(30)
+            .width(60)
+            .fontSize(12)
+            .fontWeight(FontWeight.Bold)
+            .fontColor(RED)
+            .backgroundColor('#FFFFFF')
+            .borderRadius(8)
+            .border({ width: 1, color: '#F0C9C5' })
+            .onClick(() => {
+              this.markDebugFeedback(record, false);
+            })
+        }
+        .width('100%')
+      }
+      .layoutWeight(1)
+      .alignItems(HorizontalAlign.Start)
+    }
+    .width('100%')
+    .padding(12)
+    .backgroundColor(SURFACE)
+    .borderRadius(8)
+    .border({ width: 1, color: LINE })
+  }
+  @Builder
+  private DebugCalibrationPage() {
+    Column({ space: 12 }) {
+      Column({ space: 8 }) {
+        Text('提高检测精度')
+          .fontSize(20)
+          .fontWeight(FontWeight.Bold)
+          .fontColor(INK)
+          .width('100%')
+        Text('这里预留 7 步主动校准流程。当前版本先展示步骤和预期触发项，正式采集会复用真实相机检测链路。')
+          .fontSize(14)
+          .fontColor(MUTED)
+          .lineHeight(20)
+          .width('100%')
+        Button('先记录健康基线')
+          .height(42)
+          .width('100%')
+          .fontSize(15)
+          .fontWeight(FontWeight.Bold)
+          .fontColor('#FFFFFF')
+          .backgroundColor(BLUE)
+          .borderRadius(8)
+          .opacity(this.actionOpacity())
+          .onClick(() => {
+            this.calibrateFromCurrent();
+          })
+      }
+      .width('100%')
+      .padding(16)
+      .backgroundColor(SURFACE)
+      .borderRadius(8)
+      .border({ width: 1, color: LINE })
+      ForEach(DEBUG_CALIBRATION_STEPS, (step: DebugCalibrationStepItem) => {
+        this.DebugCalibrationStepCard(step)
+      }, (step: DebugCalibrationStepItem) => step.index.toString())
+    }
+    .width('100%')
+  }
+  @Builder
+  private DebugCalibrationStepCard(step: DebugCalibrationStepItem) {
+    Row({ space: 12 }) {
+      Stack() {
+        Image(this.guideIncorrectResource(step.guideId))
+          .width('90%')
+          .height('90%')
+          .objectFit(ImageFit.Contain)
+      }
+      .width(76)
+      .height(76)
+      .backgroundColor(RED_SOFT)
+      .borderRadius(8)
+      Column({ space: 6 }) {
+        Row({ space: 8 }) {
+          Text(step.index.toString() + '/7')
+            .width(42)
+            .height(24)
+            .fontSize(12)
+            .fontWeight(FontWeight.Bold)
+            .fontColor('#FFFFFF')
+            .textAlign(TextAlign.Center)
+            .lineHeight(24)
+            .backgroundColor(BLUE)
+            .borderRadius(8)
+          Text(step.title)
+            .fontSize(16)
+            .fontWeight(FontWeight.Bold)
+            .fontColor(INK)
+            .layoutWeight(1)
+        }
+        .width('100%')
+        Text(step.instruction)
+          .fontSize(13)
+          .fontColor(MUTED)
+          .lineHeight(19)
+          .width('100%')
+        Text('预期触发：' + step.expected)
+          .fontSize(12)
+          .fontWeight(FontWeight.Bold)
+          .fontColor(step.expected === '不应触发提醒' ? GREEN : RED)
+          .width('100%')
+      }
+      .layoutWeight(1)
+      .alignItems(HorizontalAlign.Start)
+    }
+    .width('100%')
+    .padding(12)
+    .backgroundColor(SURFACE)
+    .borderRadius(8)
+    .border({ width: 1, color: LINE })
+  }
+  @Builder
+  private DebugParametersPage() {
+    Column({ space: 12 }) {
+      Column({ space: 10 }) {
+        Text('当前检测参数')
+          .fontSize(20)
+          .fontWeight(FontWeight.Bold)
+          .fontColor(INK)
+          .width('100%')
+        Text('当前档位：' + this.sensitivityLabel(this.settings.profile.sensitivity) + ' · 抽帧 ' +
+          this.intervalLabel(this.settings.profile.sampleIntervalMs) + ' · 基线 ' +
+          this.formatCalibrationStatus(this.settings.profile.calibratedAt))
+          .fontSize(13)
+          .fontColor(MUTED)
+          .lineHeight(19)
+          .width('100%')
+      }
+      .width('100%')
+      .padding(16)
+      .backgroundColor(SURFACE)
+      .borderRadius(8)
+      .border({ width: 1, color: LINE })
+      this.DebugParamCard('抬头 pitch 阈值', 'PITCH_HIGH', 15, this.debugHigherThreshold(15), 8, 22, '°')
+      this.DebugParamCard('下巴收 鼻肩比', 'NOSE_RATIO_FORWARD', 0.08, this.debugHigherThreshold(0.08), 0.04, 0.15, '')
+      this.DebugParamCard('肩宽压缩比', 'SHOULDER_COMPRESSION', 0.88, this.debugCompressionThreshold(0.12), 0.80, 0.94, '')
+      this.DebugParamCard('肩膀倾斜', 'SHOULDER_TILT', 0.06, this.debugHigherThreshold(0.06), 0.03, 0.12, '')
+      this.DebugParamCard('头部 roll 阈值', 'ROLL_HEAD_ONLY', 10, this.debugHigherThreshold(10), 5, 18, '°')
+      this.DebugParamCard('身体靠前脸部倍率', 'FACE_EXPANSION', 1.18,
+        1 + 0.18 / this.debugSensitivityScale(), 1.08, 1.35, '')
+      this.DebugParamCard('嘴巴张合增量', 'MAR_DELTA', 0.15, this.debugHigherThreshold(0.15), 0.05, 0.35, '')
+    }
+    .width('100%')
+  }
+  @Builder
+  private DebugParamCard(label: string, key: string, defaultValue: number, currentValue: number, minValue: number,
+    maxValue: number, unit: string) {
+    Column({ space: 8 }) {
+      Row() {
+        Text(label)
+          .fontSize(15)
+          .fontWeight(FontWeight.Bold)
+          .fontColor(INK)
+          .layoutWeight(1)
+        Text(key)
+          .fontSize(11)
+          .fontColor(MUTED)
+      }
+      .width('100%')
+      Row() {
+        Text('默认: ' + this.formatDebugNumber(defaultValue, unit === '°' ? 1 : 2) + unit)
+          .fontSize(12)
+          .fontColor(MUTED)
+        Blank()
+        Text('当前: ' + this.formatDebugNumber(currentValue, unit === '°' ? 1 : 2) + unit)
+          .fontSize(13)
+          .fontWeight(FontWeight.Bold)
+          .fontColor(Math.abs(currentValue - defaultValue) > 0.001 ? YELLOW : INK)
+      }
+      .width('100%')
+      Row() {
+        Text('')
+          .height(8)
+          .width(Math.max(6, Math.min(100, (currentValue - minValue) * 100 / Math.max(maxValue - minValue, 0.01))).toString() + '%')
+          .backgroundColor(BLUE)
+          .borderRadius(4)
+      }
+      .width('100%')
+      .height(8)
+      .backgroundColor('#EDF2EA')
+      .borderRadius(4)
+      Row() {
+        Text(this.formatDebugNumber(minValue, unit === '°' ? 1 : 2) + unit)
+          .fontSize(11)
+          .fontColor(MUTED)
+        Blank()
+        Text(this.formatDebugNumber(maxValue, unit === '°' ? 1 : 2) + unit)
+          .fontSize(11)
+          .fontColor(MUTED)
+      }
+      .width('100%')
+    }
+    .width('100%')
+    .padding(14)
     .backgroundColor(SURFACE)
     .borderRadius(8)
     .border({ width: 1, color: LINE })
