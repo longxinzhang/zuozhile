@@ -13,6 +13,22 @@ export const RED = '#C23B32';
 export const RED_SOFT = '#FFE9E6';
 export const BLUE = '#2457A6';
 export const BLUE_SOFT = '#EAF1FF';
+export const APP_BG = '#F2F7F3';
+export const APP_BG_MIST = '#EEF6F2';
+export const GLASS = '#FDFEFA';
+export const GLASS_SOFT = '#F8FCF8';
+export const GLASS_GREEN = '#F0FBF5';
+export const GLASS_BLUE = '#EFF6FF';
+export const BORDER_GLASS = '#FFFFFF';
+export const LINE_SOFT = '#E7EEE6';
+export const GREEN_DEEP = '#0F6B3F';
+export const AMBER_SOFT = '#FFF1CF';
+export const CORAL = '#D9463E';
+export const CORAL_SOFT = '#FFE7E2';
+export const SHADOW_CARD = '#180F251A';
+export const SHADOW_GREEN = '#2E16834F';
+export const SHADOW_BLUE = '#24528CDC';
+export const SHADOW_CORAL = '#36D9463E';
 
 export function levelText(level: PostureLevel): string {
   if (level === PostureLevel.GOOD) {

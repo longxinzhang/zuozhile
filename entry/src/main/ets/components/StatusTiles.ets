@@ -1,4 +1,4 @@
-import { INK, MUTED, SOFT } from '../theme/ZuozhiTheme';
+import { GLASS_SOFT, INK, LINE_SOFT, MUTED, SHADOW_CARD } from '../theme/ZuozhiTheme';
 
 @Component
 export struct StatTile {
@@ -19,8 +19,10 @@ export struct StatTile {
     .height(76)
     .layoutWeight(1)
     .justifyContent(FlexAlign.Center)
-    .backgroundColor(SOFT)
-    .borderRadius(8)
+    .backgroundColor(GLASS_SOFT)
+    .borderRadius(18)
+    .border({ width: 1, color: LINE_SOFT })
+    .shadow({ radius: 12, color: SHADOW_CARD, offsetY: 5 })
   }
 }
 
@@ -44,8 +46,9 @@ export struct SmallCounter {
     .height(42)
     .layoutWeight(1)
     .padding({ left: 10, right: 10 })
-    .backgroundColor('#F9FAF7')
-    .borderRadius(8)
+    .backgroundColor(GLASS_SOFT)
+    .borderRadius(16)
+    .border({ width: 1, color: LINE_SOFT })
   }
 }
 
@@ -67,7 +70,8 @@ export struct BaselineTile {
     .height(68)
     .layoutWeight(1)
     .justifyContent(FlexAlign.Center)
-    .backgroundColor(SOFT)
-    .borderRadius(8)
+    .backgroundColor(GLASS_SOFT)
+    .borderRadius(18)
+    .border({ width: 1, color: LINE_SOFT })
   }
 }

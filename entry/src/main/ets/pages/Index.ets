@@ -31,15 +31,24 @@ import { PostureSource } from '../services/PostureSource';
 import { CameraProbeResult, CameraProbeService } from '../services/CameraProbeService';
 import {
   BLUE,
+  APP_BG,
+  BORDER_GLASS,
+  CORAL,
+  GLASS,
+  GLASS_GREEN,
+  GLASS_SOFT,
   GREEN,
+  GREEN_DEEP,
   GREEN_SOFT,
   INK,
-  LINE,
+  LINE_SOFT,
   MUTED,
   RED,
   RED_SOFT,
-  SOFT,
-  SURFACE,
+  SHADOW_BLUE,
+  SHADOW_CARD,
+  SHADOW_CORAL,
+  SHADOW_GREEN,
   YELLOW,
   YELLOW_SOFT,
   levelColor,
@@ -1537,6 +1546,9 @@ struct Index {
       this.LoadingView()
     } else {
       Stack() {
+        if (this.settings.useCoreVision) {
+          this.CameraSurfaceHost()
+        }
         Column() {
           this.PageBody()
           this.TabBar()
@@ -1558,7 +1570,7 @@ struct Index {
       }
       .width('100%')
       .height('100%')
-      .backgroundColor(SOFT)
+      .backgroundColor(APP_BG)
     }
   }
   @Builder
@@ -1575,12 +1587,12 @@ struct Index {
     .width('100%')
     .height('100%')
     .justifyContent(FlexAlign.Center)
-    .backgroundColor(SOFT)
+    .backgroundColor(APP_BG)
   }
   @Builder
   private PageBody() {
     Scroll() {
-      Column({ space: 18 }) {
+      Column({ space: 16 }) {
         this.Header()
         if (this.activeTab === 0) {
           this.GuardPage()
@@ -1595,7 +1607,7 @@ struct Index {
         }
       }
       .width('100%')
-      .padding({ left: 18, right: 18, top: 18, bottom: 18 })
+      .padding({ left: 18, right: 18, top: 18, bottom: 10 })
     }
     .width('100%')
     .layoutWeight(1)
@@ -1603,30 +1615,42 @@ struct Index {
   @Builder
   private Header() {
     Row() {
-      Column({ space: 4 }) {
+      Column({ space: 6 }) {
         Text('坐直了')
-          .fontSize(30)
+          .fontSize(34)
           .fontWeight(FontWeight.Bold)
           .fontColor(INK)
-        Text(this.isGuarding ? '前台守护中' : '前台守护待开启')
-          .fontSize(13)
-          .fontColor(MUTED)
+        Row({ space: 6 }) {
+          Text('')
+            .width(8)
+            .height(8)
+            .backgroundColor(this.isGuarding ? GREEN : MUTED)
+            .borderRadius(4)
+          Text(this.isGuarding ? '前台守护中' : '前台守护待开启')
+            .fontSize(14)
+            .fontWeight(FontWeight.Bold)
+            .fontColor(this.isGuarding ? GREEN_DEEP : MUTED)
+        }
       }
       .alignItems(HorizontalAlign.Start)
       .layoutWeight(1)
-      if (this.settings.useCoreVision) {
-        this.CameraSurfaceHost()
+      Row({ space: 8 }) {
+        Text(this.isGuarding ? '守护中' : '未开启')
+          .fontSize(13)
+          .fontWeight(FontWeight.Bold)
+          .fontColor(this.isGuarding ? GREEN_DEEP : MUTED)
+        Text('')
+          .width(28)
+          .height(18)
+          .backgroundColor(this.isGuarding ? GREEN : '#DDE6DF')
+          .borderRadius(9)
       }
-      Text(this.isGuarding ? 'ON' : 'OFF')
-        .width(58)
-        .height(34)
-        .fontSize(14)
-        .fontWeight(FontWeight.Bold)
-        .fontColor(this.isGuarding ? '#FFFFFF' : MUTED)
-        .textAlign(TextAlign.Center)
-        .lineHeight(34)
-        .backgroundColor(this.isGuarding ? GREEN : '#E6EBE4')
-        .borderRadius(8)
+      .height(42)
+      .padding({ left: 14, right: 12 })
+      .backgroundColor(GLASS)
+      .borderRadius(21)
+      .border({ width: 1, color: BORDER_GLASS })
+      .shadow({ radius: 18, color: SHADOW_CARD, offsetY: 8 })
     }
     .width('100%')
   }
@@ -1642,16 +1666,30 @@ struct Index {
   }
   @Builder
   private ScorePanel() {
-    Column({ space: 16 }) {
+    Column({ space: 14 }) {
       Row() {
-        Column({ space: 6 }) {
-          Text(this.summary)
-            .fontSize(24)
-            .fontWeight(FontWeight.Bold)
-            .fontColor(INK)
+        Column({ space: 8 }) {
+          Row({ space: 8 }) {
+            Text('')
+              .width(18)
+              .height(18)
+              .backgroundColor(scoreColor(this.score))
+              .borderRadius(9)
+            Text(this.summary)
+              .fontSize(22)
+              .fontWeight(FontWeight.Bold)
+              .fontColor(INK)
+              .maxLines(1)
+          }
           Text('上次采样 ' + this.lastSampleText + ' · ' + this.intervalLabel(this.settings.profile.sampleIntervalMs) + ' 抽帧')
             .fontSize(13)
             .fontColor(MUTED)
+            .maxLines(1)
+          Text('综合评分')
+            .fontSize(14)
+            .fontWeight(FontWeight.Bold)
+            .fontColor(MUTED)
+            .margin({ top: 8 })
           if (this.summary === '采样失败') {
             Text(this.sourceDetail)
               .fontSize(12)
@@ -1662,16 +1700,23 @@ struct Index {
         }
         .alignItems(HorizontalAlign.Start)
         .layoutWeight(1)
-        Text(this.score.toString())
-          .width(86)
-          .height(86)
-          .fontSize(38)
-          .fontWeight(FontWeight.Bold)
-          .fontColor('#FFFFFF')
-          .textAlign(TextAlign.Center)
-          .lineHeight(86)
-          .backgroundColor(scoreColor(this.score))
-          .borderRadius(8)
+        Stack() {
+          Text('')
+            .width(106)
+            .height(106)
+            .backgroundColor(GLASS_GREEN)
+            .borderRadius(53)
+          Text(this.score.toString())
+            .width(106)
+            .height(106)
+            .fontSize(48)
+            .fontWeight(FontWeight.Bold)
+            .fontColor(scoreColor(this.score))
+            .textAlign(TextAlign.Center)
+            .lineHeight(106)
+        }
+        .width(116)
+        .height(116)
       }
       .width('100%')
       Column({ space: 8 }) {
@@ -1701,10 +1746,11 @@ struct Index {
       .width('100%')
     }
     .width('100%')
-    .padding(18)
-    .backgroundColor(SURFACE)
-    .borderRadius(8)
-    .border({ width: 1, color: LINE })
+    .padding(20)
+    .backgroundColor(GLASS_GREEN)
+    .borderRadius(28)
+    .border({ width: 1, color: BORDER_GLASS })
+    .shadow({ radius: 30, color: SHADOW_GREEN, offsetY: 12 })
   }
   @Builder
   private HardReminderOverlay() {
@@ -1728,8 +1774,8 @@ struct Index {
           .fontSize(16)
           .fontWeight(FontWeight.Bold)
           .fontColor('#FFFFFF')
-          .backgroundColor(RED)
-          .borderRadius(8)
+          .backgroundColor(CORAL)
+          .borderRadius(20)
           .onClick(() => {
             this.clearHardReminder();
           })
@@ -1737,9 +1783,10 @@ struct Index {
       .width('82%')
       .padding(22)
       .alignItems(HorizontalAlign.Center)
-      .backgroundColor(SURFACE)
-      .borderRadius(8)
-      .shadow({ radius: 18, color: '#33000000', offsetY: 8 })
+      .backgroundColor(GLASS)
+      .borderRadius(26)
+      .border({ width: 1, color: BORDER_GLASS })
+      .shadow({ radius: 28, color: '#33000000', offsetY: 10 })
     }
     .width('100%')
     .height('100%')
@@ -1774,7 +1821,7 @@ struct Index {
     .layoutWeight(1)
     .height(128)
     .backgroundColor(background)
-    .borderRadius(8)
+    .borderRadius(18)
   }
   @Builder
   private ClearDataConfirmOverlay() {
@@ -1797,9 +1844,9 @@ struct Index {
             .fontSize(15)
             .fontWeight(FontWeight.Bold)
             .fontColor(INK)
-            .backgroundColor('#F9FAF7')
-            .borderRadius(8)
-            .border({ width: 1, color: LINE })
+            .backgroundColor(GLASS_SOFT)
+            .borderRadius(18)
+            .border({ width: 1, color: LINE_SOFT })
             .onClick(() => {
               this.dismissClearDataConfirm();
             })
@@ -1809,8 +1856,8 @@ struct Index {
             .fontSize(15)
             .fontWeight(FontWeight.Bold)
             .fontColor('#FFFFFF')
-            .backgroundColor(RED)
-            .borderRadius(8)
+            .backgroundColor(CORAL)
+            .borderRadius(18)
             .onClick(() => {
               this.confirmClearData();
             })
@@ -1820,9 +1867,10 @@ struct Index {
       .width('82%')
       .padding(22)
       .alignItems(HorizontalAlign.Center)
-      .backgroundColor(SURFACE)
-      .borderRadius(8)
-      .shadow({ radius: 18, color: '#33000000', offsetY: 8 })
+      .backgroundColor(GLASS)
+      .borderRadius(26)
+      .border({ width: 1, color: BORDER_GLASS })
+      .shadow({ radius: 28, color: '#33000000', offsetY: 10 })
     }
     .width('100%')
     .height('100%')
@@ -1852,9 +1900,9 @@ struct Index {
             .fontSize(15)
             .fontWeight(FontWeight.Bold)
             .fontColor(INK)
-            .backgroundColor('#F9FAF7')
-            .borderRadius(8)
-            .border({ width: 1, color: LINE })
+            .backgroundColor(GLASS_SOFT)
+            .borderRadius(18)
+            .border({ width: 1, color: LINE_SOFT })
             .onClick(() => {
               this.dismissResetCalibrationConfirm();
             })
@@ -1864,8 +1912,8 @@ struct Index {
             .fontSize(15)
             .fontWeight(FontWeight.Bold)
             .fontColor('#FFFFFF')
-            .backgroundColor(RED)
-            .borderRadius(8)
+            .backgroundColor(CORAL)
+            .borderRadius(18)
             .onClick(() => {
               this.confirmResetCalibration();
             })
@@ -1875,9 +1923,10 @@ struct Index {
       .width('82%')
       .padding(22)
       .alignItems(HorizontalAlign.Center)
-      .backgroundColor(SURFACE)
-      .borderRadius(8)
-      .shadow({ radius: 18, color: '#33000000', offsetY: 8 })
+      .backgroundColor(GLASS)
+      .borderRadius(26)
+      .border({ width: 1, color: BORDER_GLASS })
+      .shadow({ radius: 28, color: '#33000000', offsetY: 10 })
     }
     .width('100%')
     .height('100%')
@@ -1907,9 +1956,9 @@ struct Index {
             .fontSize(15)
             .fontWeight(FontWeight.Bold)
             .fontColor(INK)
-            .backgroundColor('#F9FAF7')
-            .borderRadius(8)
-            .border({ width: 1, color: LINE })
+            .backgroundColor(GLASS_SOFT)
+            .borderRadius(18)
+            .border({ width: 1, color: LINE_SOFT })
             .onClick(() => {
               this.dismissCoreVisionConfirm();
             })
@@ -1919,8 +1968,8 @@ struct Index {
             .fontSize(15)
             .fontWeight(FontWeight.Bold)
             .fontColor('#FFFFFF')
-            .backgroundColor(RED)
-            .borderRadius(8)
+            .backgroundColor(CORAL)
+            .borderRadius(18)
             .onClick(() => {
               this.confirmToggleCoreVision();
             })
@@ -1930,9 +1979,10 @@ struct Index {
       .width('82%')
       .padding(22)
       .alignItems(HorizontalAlign.Center)
-      .backgroundColor(SURFACE)
-      .borderRadius(8)
-      .shadow({ radius: 18, color: '#33000000', offsetY: 8 })
+      .backgroundColor(GLASS)
+      .borderRadius(26)
+      .border({ width: 1, color: BORDER_GLASS })
+      .shadow({ radius: 28, color: '#33000000', offsetY: 10 })
     }
     .width('100%')
     .height('100%')
@@ -1952,11 +2002,12 @@ struct Index {
   }
   @Builder
   private MetricTile(title: string, level: PostureLevel, label: string, value: string) {
-    Column({ space: 6 }) {
+    Column({ space: 8 }) {
       Row() {
         Text(title)
-          .fontSize(13)
-          .fontColor(MUTED)
+          .fontSize(15)
+          .fontWeight(FontWeight.Bold)
+          .fontColor(INK)
         Blank()
         Text(levelText(level))
           .width(48)
@@ -1967,37 +2018,49 @@ struct Index {
           .textAlign(TextAlign.Center)
           .lineHeight(26)
           .backgroundColor(levelSoftColor(level))
-          .borderRadius(8)
+          .borderRadius(13)
       }
       .width('100%')
       Text(label)
-        .fontSize(15)
+        .fontSize(16)
         .fontWeight(FontWeight.Bold)
         .fontColor(INK)
         .maxLines(1)
-      Text(value)
-        .fontSize(13)
-        .fontColor(MUTED)
+      Row() {
+        Text(value)
+          .fontSize(15)
+          .fontWeight(FontWeight.Bold)
+          .fontColor(levelColor(level))
+        Blank()
+        Text('›')
+          .fontSize(18)
+          .fontWeight(FontWeight.Bold)
+          .fontColor(MUTED)
+      }
+      .width('100%')
     }
-    .height(92)
+    .height(126)
     .layoutWeight(1)
     .alignItems(HorizontalAlign.Start)
-    .padding(12)
-    .backgroundColor(SURFACE)
-    .borderRadius(8)
-    .border({ width: 1, color: LINE })
+    .justifyContent(FlexAlign.SpaceBetween)
+    .padding(14)
+    .backgroundColor(GLASS)
+    .borderRadius(22)
+    .border({ width: 1, color: LINE_SOFT })
+    .shadow({ radius: 18, color: SHADOW_CARD, offsetY: 8 })
   }
   @Builder
   private GuardActions() {
     Column({ space: 10 }) {
       Button(this.guardButtonText())
-        .height(52)
+        .height(58)
         .width('100%')
-        .fontSize(18)
+        .fontSize(19)
         .fontWeight(FontWeight.Bold)
         .fontColor('#FFFFFF')
         .backgroundColor(this.guardButtonColor())
-        .borderRadius(8)
+        .borderRadius(24)
+        .shadow({ radius: 20, color: (this.isGuarding || this.isStoppingGuard) ? SHADOW_CORAL : SHADOW_GREEN, offsetY: 8 })
         .opacity(this.actionOpacity())
         .onClick(() => {
           if (this.controlsLocked()) {
@@ -2015,27 +2078,29 @@ struct Index {
       this.PostureInsightCard()
       Row({ space: 10 }) {
         Button(this.isManualOperation ? '处理中' : '记录基线')
-          .height(44)
+          .height(52)
           .layoutWeight(1)
           .fontSize(15)
           .fontWeight(FontWeight.Bold)
           .fontColor(INK)
-          .backgroundColor(SURFACE)
-          .borderRadius(8)
-          .border({ width: 1, color: LINE })
+          .backgroundColor(GLASS)
+          .borderRadius(22)
+          .border({ width: 1, color: BORDER_GLASS })
+          .shadow({ radius: 16, color: SHADOW_CARD, offsetY: 6 })
           .opacity(this.actionOpacity())
           .onClick(() => {
             this.calibrateFromCurrent();
           })
         Button(this.isManualOperation ? '处理中' : '抽样一次')
-          .height(44)
+          .height(52)
           .layoutWeight(1)
           .fontSize(15)
           .fontWeight(FontWeight.Bold)
           .fontColor(INK)
-          .backgroundColor(SURFACE)
-          .borderRadius(8)
-          .border({ width: 1, color: LINE })
+          .backgroundColor(GLASS)
+          .borderRadius(22)
+          .border({ width: 1, color: BORDER_GLASS })
+          .shadow({ radius: 16, color: SHADOW_CARD, offsetY: 6 })
           .opacity(this.actionOpacity())
           .onClick(() => {
             this.sampleOnce();
@@ -2100,10 +2165,11 @@ struct Index {
       .width('100%')
     }
     .width('100%')
-    .padding(14)
-    .backgroundColor(SURFACE)
-    .borderRadius(8)
-    .border({ width: 1, color: LINE })
+    .padding(16)
+    .backgroundColor(GLASS)
+    .borderRadius(22)
+    .border({ width: 1, color: BORDER_GLASS })
+    .shadow({ radius: 18, color: SHADOW_CARD, offsetY: 8 })
   }
   @Builder
   private PostureInsightCard() {
@@ -2120,7 +2186,7 @@ struct Index {
             .textAlign(TextAlign.Center)
             .lineHeight(26)
             .backgroundColor(this.postureSoftColor())
-            .borderRadius(8)
+            .borderRadius(13)
           Text(this.postureInsightTitle())
             .fontSize(18)
             .fontWeight(FontWeight.Bold)
@@ -2162,9 +2228,10 @@ struct Index {
     .height(148)
     .width('100%')
     .padding(12)
-    .backgroundColor(SURFACE)
-    .borderRadius(8)
-    .border({ width: 1, color: LINE })
+    .backgroundColor(GLASS)
+    .borderRadius(24)
+    .border({ width: 1, color: BORDER_GLASS })
+    .shadow({ radius: 18, color: SHADOW_CARD, offsetY: 8 })
   }
   @Builder
   private PostureDemoFigure() {
@@ -2177,7 +2244,7 @@ struct Index {
     .width(116)
     .height(124)
     .backgroundColor(this.postureFigureBackground())
-    .borderRadius(8)
+    .borderRadius(18)
   }
   @Builder
   private PrivacyBand() {
@@ -2220,10 +2287,11 @@ struct Index {
         .lineHeight(19)
     }
     .width('100%')
-    .padding(14)
-    .backgroundColor(GREEN_SOFT)
-    .borderRadius(8)
-    .border({ width: 1, color: '#CFE8D8' })
+    .padding(16)
+    .backgroundColor(GLASS_GREEN)
+    .borderRadius(22)
+    .border({ width: 1, color: '#D9EEDF' })
+    .shadow({ radius: 16, color: SHADOW_CARD, offsetY: 6 })
   }
   @Builder
   private CameraSurfaceHost() {
@@ -2232,9 +2300,10 @@ struct Index {
       type: XComponentType.SURFACE,
       controller: this.cameraPreviewController
     })
-      .width(2)
-      .height(2)
-      .opacity(0.01)
+      .width(1)
+      .height(1)
+      .opacity(0)
+      .position({ x: -16, y: -16 })
       .onLoad(() => {
         this.cameraPreviewSurfaceId = this.cameraPreviewController.getXComponentSurfaceId();
         if (!this.isGuarding) {
@@ -2261,7 +2330,7 @@ struct Index {
     return this.isGuarding ? '结束守护' : '开始守护';
   }
   private guardButtonColor(): string {
-    return (this.isGuarding || this.isStoppingGuard) ? RED : GREEN;
+    return (this.isGuarding || this.isStoppingGuard) ? CORAL : GREEN;
   }
   private switchTab(index: number): void {
     if (this.controlsLocked()) {
@@ -2453,9 +2522,10 @@ struct Index {
     }
     .width('100%')
     .padding(16)
-    .backgroundColor(SURFACE)
-    .borderRadius(8)
-    .border({ width: 1, color: LINE })
+    .backgroundColor(GLASS)
+    .borderRadius(24)
+    .border({ width: 1, color: BORDER_GLASS })
+    .shadow({ radius: 18, color: SHADOW_CARD, offsetY: 8 })
   }
   @Builder
   private AlertBreakdownPanel() {
@@ -2479,8 +2549,8 @@ struct Index {
           .textAlign(TextAlign.Center)
           .width('100%')
           .lineHeight(56)
-          .backgroundColor('#F9FAF7')
-          .borderRadius(8)
+          .backgroundColor(GLASS_SOFT)
+          .borderRadius(16)
       } else {
         ForEach(this.alertBreakdown().slice(0, 5), (item: AlertBreakdownItem) => {
           Column({ space: 6 }) {
@@ -2509,16 +2579,18 @@ struct Index {
           }
           .width('100%')
           .padding({ left: 10, right: 10, top: 10, bottom: 10 })
-          .backgroundColor('#F9FAF7')
-          .borderRadius(8)
+          .backgroundColor(GLASS_SOFT)
+          .borderRadius(16)
+          .border({ width: 1, color: LINE_SOFT })
         }, (item: AlertBreakdownItem) => item.type)
       }
     }
     .width('100%')
     .padding(16)
-    .backgroundColor(SURFACE)
-    .borderRadius(8)
-    .border({ width: 1, color: LINE })
+    .backgroundColor(GLASS)
+    .borderRadius(24)
+    .border({ width: 1, color: BORDER_GLASS })
+    .shadow({ radius: 18, color: SHADOW_CARD, offsetY: 8 })
   }
   @Builder
   private HourChart() {
@@ -2535,13 +2607,13 @@ struct Index {
               Text('')
                 .width('100%')
                 .height(112)
-                .backgroundColor('#EDF2EA')
-                .borderRadius(8)
+                .backgroundColor('#E7EFE8')
+                .borderRadius(14)
               Text('')
                 .width('100%')
                 .height(Math.max(8, bucket.score))
                 .backgroundColor(scoreColor(bucket.score))
-                .borderRadius(8)
+                .borderRadius(14)
             }
             .height(112)
             .width('100%')
@@ -2560,9 +2632,10 @@ struct Index {
     }
     .width('100%')
     .padding(16)
-    .backgroundColor(SURFACE)
-    .borderRadius(8)
-    .border({ width: 1, color: LINE })
+    .backgroundColor(GLASS)
+    .borderRadius(24)
+    .border({ width: 1, color: BORDER_GLASS })
+    .shadow({ radius: 18, color: SHADOW_CARD, offsetY: 8 })
   }
   @Builder
   private RecentList() {
@@ -2580,8 +2653,8 @@ struct Index {
           .textAlign(TextAlign.Center)
           .width('100%')
           .lineHeight(56)
-          .backgroundColor('#F9FAF7')
-          .borderRadius(8)
+          .backgroundColor(GLASS_SOFT)
+          .borderRadius(16)
       } else {
         ForEach(this.recentRecords(), (record: SessionRecord) => {
           Row() {
@@ -2606,16 +2679,18 @@ struct Index {
           .height(44)
           .width('100%')
           .padding({ left: 10, right: 10 })
-          .backgroundColor('#F9FAF7')
-          .borderRadius(8)
+          .backgroundColor(GLASS_SOFT)
+          .borderRadius(16)
+          .border({ width: 1, color: LINE_SOFT })
         }, (record: SessionRecord) => record.timestamp.toString())
       }
     }
     .width('100%')
     .padding(16)
-    .backgroundColor(SURFACE)
-    .borderRadius(8)
-    .border({ width: 1, color: LINE })
+    .backgroundColor(GLASS)
+    .borderRadius(24)
+    .border({ width: 1, color: BORDER_GLASS })
+    .shadow({ radius: 18, color: SHADOW_CARD, offsetY: 8 })
   }
   @Builder
   private DebugPage() {
@@ -2652,9 +2727,9 @@ struct Index {
           .fontSize(13)
           .fontWeight(FontWeight.Bold)
           .fontColor(this.activeDebugTab === item.index ? '#FFFFFF' : INK)
-          .backgroundColor(this.activeDebugTab === item.index ? BLUE : '#F9FAF7')
-          .borderRadius(8)
-          .border({ width: 1, color: this.activeDebugTab === item.index ? BLUE : LINE })
+          .backgroundColor(this.activeDebugTab === item.index ? BLUE : GLASS_SOFT)
+          .borderRadius(18)
+          .border({ width: 1, color: this.activeDebugTab === item.index ? BLUE : LINE_SOFT })
           .onClick(() => {
             this.activeDebugTab = item.index;
           })
@@ -2675,7 +2750,7 @@ struct Index {
           .width('100%')
           .padding({ left: 12, right: 12, top: 8, bottom: 8 })
           .backgroundColor(BLUE_SOFT)
-          .borderRadius(8)
+          .borderRadius(16)
       }
       if (this.records.length === 0) {
         Text('暂无检测记录。开始守护后，这里会显示最近触发项和采样结果。')
@@ -2684,9 +2759,9 @@ struct Index {
           .lineHeight(20)
           .width('100%')
           .padding(14)
-          .backgroundColor(SURFACE)
-          .borderRadius(8)
-          .border({ width: 1, color: LINE })
+          .backgroundColor(GLASS)
+          .borderRadius(20)
+          .border({ width: 1, color: BORDER_GLASS })
       } else {
         ForEach(this.debugRecentDetectionRecords(), (record: SessionRecord) => {
           this.DebugLogCard(record)
@@ -2730,9 +2805,10 @@ struct Index {
     }
     .width('100%')
     .padding(16)
-    .backgroundColor(SURFACE)
-    .borderRadius(8)
-    .border({ width: 1, color: LINE })
+    .backgroundColor(GLASS)
+    .borderRadius(24)
+    .border({ width: 1, color: BORDER_GLASS })
+    .shadow({ radius: 18, color: SHADOW_CARD, offsetY: 8 })
   }
   @Builder
   private DebugLogCard(record: SessionRecord) {
@@ -2746,7 +2822,7 @@ struct Index {
       .width(64)
       .height(64)
       .backgroundColor(scoreColor(record.score))
-      .borderRadius(8)
+      .borderRadius(18)
       Column({ space: 6 }) {
         Row({ space: 8 }) {
           Text(this.formatClock(record.timestamp))
@@ -2779,7 +2855,7 @@ struct Index {
             .fontWeight(FontWeight.Bold)
             .fontColor('#FFFFFF')
             .backgroundColor(GREEN)
-            .borderRadius(8)
+            .borderRadius(15)
             .onClick(() => {
               this.markDebugFeedback(record, true);
             })
@@ -2790,7 +2866,7 @@ struct Index {
             .fontWeight(FontWeight.Bold)
             .fontColor(RED)
             .backgroundColor('#FFFFFF')
-            .borderRadius(8)
+            .borderRadius(15)
             .border({ width: 1, color: '#F0C9C5' })
             .onClick(() => {
               this.markDebugFeedback(record, false);
@@ -2803,9 +2879,10 @@ struct Index {
     }
     .width('100%')
     .padding(12)
-    .backgroundColor(SURFACE)
-    .borderRadius(8)
-    .border({ width: 1, color: LINE })
+    .backgroundColor(GLASS)
+    .borderRadius(22)
+    .border({ width: 1, color: BORDER_GLASS })
+    .shadow({ radius: 14, color: SHADOW_CARD, offsetY: 6 })
   }
   @Builder
   private DebugCalibrationPage() {
@@ -2828,7 +2905,7 @@ struct Index {
           .fontWeight(FontWeight.Bold)
           .fontColor('#FFFFFF')
           .backgroundColor(BLUE)
-          .borderRadius(8)
+          .borderRadius(18)
           .opacity(this.actionOpacity())
           .onClick(() => {
             this.calibrateFromCurrent();
@@ -2836,9 +2913,10 @@ struct Index {
       }
       .width('100%')
       .padding(16)
-      .backgroundColor(SURFACE)
-      .borderRadius(8)
-      .border({ width: 1, color: LINE })
+      .backgroundColor(GLASS)
+      .borderRadius(24)
+      .border({ width: 1, color: BORDER_GLASS })
+      .shadow({ radius: 18, color: SHADOW_CARD, offsetY: 8 })
       ForEach(DEBUG_CALIBRATION_STEPS, (step: DebugCalibrationStepItem) => {
         this.DebugCalibrationStepCard(step)
       }, (step: DebugCalibrationStepItem) => step.index.toString())
@@ -2857,7 +2935,7 @@ struct Index {
       .width(76)
       .height(76)
       .backgroundColor(RED_SOFT)
-      .borderRadius(8)
+      .borderRadius(18)
       Column({ space: 6 }) {
         Row({ space: 8 }) {
           Text(step.index.toString() + '/7')
@@ -2869,7 +2947,7 @@ struct Index {
             .textAlign(TextAlign.Center)
             .lineHeight(24)
             .backgroundColor(BLUE)
-            .borderRadius(8)
+            .borderRadius(12)
           Text(step.title)
             .fontSize(16)
             .fontWeight(FontWeight.Bold)
@@ -2893,9 +2971,10 @@ struct Index {
     }
     .width('100%')
     .padding(12)
-    .backgroundColor(SURFACE)
-    .borderRadius(8)
-    .border({ width: 1, color: LINE })
+    .backgroundColor(GLASS)
+    .borderRadius(22)
+    .border({ width: 1, color: BORDER_GLASS })
+    .shadow({ radius: 14, color: SHADOW_CARD, offsetY: 6 })
   }
   @Builder
   private DebugParametersPage() {
@@ -2916,9 +2995,10 @@ struct Index {
       }
       .width('100%')
       .padding(16)
-      .backgroundColor(SURFACE)
-      .borderRadius(8)
-      .border({ width: 1, color: LINE })
+      .backgroundColor(GLASS)
+      .borderRadius(24)
+      .border({ width: 1, color: BORDER_GLASS })
+      .shadow({ radius: 18, color: SHADOW_CARD, offsetY: 8 })
       this.DebugParamCard('抬头 pitch 阈值', 'PITCH_HIGH', 15, this.debugHigherThreshold(15), 8, 22, '°')
       this.DebugParamCard('下巴收 鼻肩比', 'NOSE_RATIO_FORWARD', 0.08, this.debugHigherThreshold(0.08), 0.04, 0.15, '')
       this.DebugParamCard('肩宽压缩比', 'SHOULDER_COMPRESSION', 0.88, this.debugCompressionThreshold(0.12), 0.80, 0.94, '')
@@ -2980,9 +3060,10 @@ struct Index {
     }
     .width('100%')
     .padding(14)
-    .backgroundColor(SURFACE)
-    .borderRadius(8)
-    .border({ width: 1, color: LINE })
+    .backgroundColor(GLASS)
+    .borderRadius(22)
+    .border({ width: 1, color: BORDER_GLASS })
+    .shadow({ radius: 14, color: SHADOW_CARD, offsetY: 6 })
   }
   private alertGuideId(type: PostureAlertType): number {
     if (type === PostureAlertType.ITEM_01 || type === PostureAlertType.KYPHOSIS) {
@@ -3124,7 +3205,7 @@ struct Index {
           .fontColor('#FFFFFF')
           .textAlign(TextAlign.Center)
           .lineHeight(30)
-          .backgroundColor('#EF563D')
+          .backgroundColor(CORAL)
           .borderRadius(15)
         Text(item.title)
           .fontSize(19)
@@ -3146,7 +3227,7 @@ struct Index {
           .width(28)
           .fontSize(22)
           .fontWeight(FontWeight.Bold)
-          .fontColor('#EF563D')
+          .fontColor(CORAL)
           .textAlign(TextAlign.Center)
         this.GuideImage(this.guideCorrectResource(item.id), GREEN_SOFT)
       }
@@ -3154,9 +3235,10 @@ struct Index {
     }
     .width('100%')
     .padding(16)
-    .backgroundColor(SURFACE)
-    .borderRadius(8)
-    .border({ width: 1, color: LINE })
+    .backgroundColor(GLASS)
+    .borderRadius(24)
+    .border({ width: 1, color: BORDER_GLASS })
+    .shadow({ radius: 16, color: SHADOW_CARD, offsetY: 7 })
   }
   @Builder
   private GuideImage(resource: Resource, background: string) {
@@ -3167,9 +3249,10 @@ struct Index {
         .objectFit(ImageFit.Contain)
     }
     .layoutWeight(1)
-    .height(146)
+    .height(124)
     .backgroundColor(background)
-    .borderRadius(8)
+    .borderRadius(18)
+    .border({ width: 1, color: LINE_SOFT })
   }
   @Builder
   private SettingsPage() {
@@ -3182,10 +3265,11 @@ struct Index {
         .width('100%')
         .fontSize(16)
         .fontWeight(FontWeight.Bold)
-        .fontColor(RED)
-        .backgroundColor(SURFACE)
-        .borderRadius(8)
+        .fontColor(CORAL)
+        .backgroundColor(GLASS)
+        .borderRadius(22)
         .border({ width: 1, color: '#F0C9C5' })
+        .shadow({ radius: 16, color: SHADOW_CARD, offsetY: 6 })
         .opacity(this.actionOpacity())
         .onClick(() => {
           this.requestClearData();
@@ -3231,7 +3315,7 @@ struct Index {
                 .textAlign(TextAlign.Center)
                 .lineHeight(24)
                 .backgroundColor('#FFFFFF')
-                .borderRadius(8)
+                .borderRadius(12)
             }
           }
           .width('100%')
@@ -3254,30 +3338,30 @@ struct Index {
           .width('100%')
           .padding({ left: 10, right: 10, top: 8, bottom: 8 })
           .backgroundColor(this.calibrationProgressSoftColor())
-          .borderRadius(8)
+          .borderRadius(16)
       }
       Row({ space: 10 }) {
         Button(this.isManualOperation ? '处理中' : '记录基线')
-          .height(44)
+          .height(48)
           .layoutWeight(1)
           .fontSize(15)
           .fontWeight(FontWeight.Bold)
           .fontColor('#FFFFFF')
           .backgroundColor(BLUE)
-          .borderRadius(8)
+          .borderRadius(20)
           .opacity(this.actionOpacity())
           .onClick(() => {
             this.calibrateFromCurrent();
           })
         Button('恢复默认')
-          .height(44)
+          .height(48)
           .layoutWeight(1)
           .fontSize(15)
           .fontWeight(FontWeight.Bold)
           .fontColor(INK)
-          .backgroundColor('#F9FAF7')
-          .borderRadius(8)
-          .border({ width: 1, color: LINE })
+          .backgroundColor(GLASS_SOFT)
+          .borderRadius(20)
+          .border({ width: 1, color: LINE_SOFT })
           .opacity(this.actionOpacity())
           .onClick(() => {
             this.requestResetCalibration();
@@ -3287,9 +3371,10 @@ struct Index {
     }
     .width('100%')
     .padding(16)
-    .backgroundColor(SURFACE)
-    .borderRadius(8)
-    .border({ width: 1, color: LINE })
+    .backgroundColor(GLASS)
+    .borderRadius(24)
+    .border({ width: 1, color: BORDER_GLASS })
+    .shadow({ radius: 18, color: SHADOW_CARD, offsetY: 8 })
   }
   @Builder
   private SamplingPanel() {
@@ -3318,9 +3403,10 @@ struct Index {
     }
     .width('100%')
     .padding(16)
-    .backgroundColor(SURFACE)
-    .borderRadius(8)
-    .border({ width: 1, color: LINE })
+    .backgroundColor(GLASS)
+    .borderRadius(24)
+    .border({ width: 1, color: BORDER_GLASS })
+    .shadow({ radius: 18, color: SHADOW_CARD, offsetY: 8 })
   }
   @Builder
   private SegmentButton(label: string, value: number) {
@@ -3337,9 +3423,9 @@ struct Index {
       .height(48)
       .layoutWeight(1)
       .padding({ left: 14, right: 14 })
-      .backgroundColor(this.isSensitivitySelected(value) ? BLUE : '#F9FAF7')
-      .borderRadius(8)
-      .border({ width: 1, color: this.isSensitivitySelected(value) ? BLUE : LINE })
+      .backgroundColor(this.isSensitivitySelected(value) ? BLUE : GLASS_SOFT)
+      .borderRadius(20)
+      .border({ width: 1, color: this.isSensitivitySelected(value) ? BLUE : LINE_SOFT })
       .opacity(this.actionOpacity())
       .onClick(() => {
         this.setSensitivity(value);
@@ -3353,9 +3439,9 @@ struct Index {
       .fontSize(14)
       .fontWeight(FontWeight.Bold)
       .fontColor(this.settings.profile.sampleIntervalMs === value ? '#FFFFFF' : INK)
-      .backgroundColor(this.settings.profile.sampleIntervalMs === value ? GREEN : '#F9FAF7')
-      .borderRadius(8)
-      .border({ width: 1, color: this.settings.profile.sampleIntervalMs === value ? GREEN : LINE })
+      .backgroundColor(this.settings.profile.sampleIntervalMs === value ? GREEN : GLASS_SOFT)
+      .borderRadius(20)
+      .border({ width: 1, color: this.settings.profile.sampleIntervalMs === value ? GREEN : LINE_SOFT })
       .opacity(this.actionOpacity())
       .onClick(() => {
         this.setIntervalMs(value);
@@ -3376,9 +3462,10 @@ struct Index {
     }
     .width('100%')
     .padding(16)
-    .backgroundColor(SURFACE)
-    .borderRadius(8)
-    .border({ width: 1, color: LINE })
+    .backgroundColor(GLASS)
+    .borderRadius(24)
+    .border({ width: 1, color: BORDER_GLASS })
+    .shadow({ radius: 18, color: SHADOW_CARD, offsetY: 8 })
   }
   @Builder
   private CoreVisionSwitchRow() {
@@ -3395,7 +3482,7 @@ struct Index {
         .fontWeight(FontWeight.Bold)
         .fontColor(this.settings.useCoreVision ? '#FFFFFF' : MUTED)
         .backgroundColor(this.settings.useCoreVision ? GREEN : '#E6EBE4')
-        .borderRadius(8)
+        .borderRadius(15)
         .opacity(this.actionOpacity())
         .onClick(() => {
           this.requestToggleCoreVision();
@@ -3404,8 +3491,9 @@ struct Index {
     .height(48)
     .width('100%')
     .padding({ left: 12, right: 10 })
-    .backgroundColor('#F9FAF7')
-    .borderRadius(8)
+    .backgroundColor(GLASS_SOFT)
+    .borderRadius(18)
+    .border({ width: 1, color: LINE_SOFT })
   }
   @Builder
   private PrivacySwitchRow() {
@@ -3422,7 +3510,7 @@ struct Index {
         .fontWeight(FontWeight.Bold)
         .fontColor(this.settings.privacyMode ? '#FFFFFF' : MUTED)
         .backgroundColor(this.settings.privacyMode ? GREEN : '#E6EBE4')
-        .borderRadius(8)
+        .borderRadius(15)
         .opacity(this.actionOpacity())
         .onClick(() => {
           this.togglePrivacy();
@@ -3431,8 +3519,9 @@ struct Index {
     .height(48)
     .width('100%')
     .padding({ left: 12, right: 10 })
-    .backgroundColor('#F9FAF7')
-    .borderRadius(8)
+    .backgroundColor(GLASS_SOFT)
+    .borderRadius(18)
+    .border({ width: 1, color: LINE_SOFT })
   }
   @Builder
   private SoundSwitchRow() {
@@ -3449,7 +3538,7 @@ struct Index {
         .fontWeight(FontWeight.Bold)
         .fontColor(this.settings.gentleSound ? '#FFFFFF' : MUTED)
         .backgroundColor(this.settings.gentleSound ? GREEN : '#E6EBE4')
-        .borderRadius(8)
+        .borderRadius(15)
         .opacity(this.actionOpacity())
         .onClick(() => {
           this.toggleSound();
@@ -3458,8 +3547,9 @@ struct Index {
     .height(48)
     .width('100%')
     .padding({ left: 12, right: 10 })
-    .backgroundColor('#F9FAF7')
-    .borderRadius(8)
+    .backgroundColor(GLASS_SOFT)
+    .borderRadius(18)
+    .border({ width: 1, color: LINE_SOFT })
   }
   @Builder
   private VibrationSwitchRow() {
@@ -3476,7 +3566,7 @@ struct Index {
         .fontWeight(FontWeight.Bold)
         .fontColor(this.settings.vibration ? '#FFFFFF' : MUTED)
         .backgroundColor(this.settings.vibration ? GREEN : '#E6EBE4')
-        .borderRadius(8)
+        .borderRadius(15)
         .opacity(this.actionOpacity())
         .onClick(() => {
           this.toggleVibration();
@@ -3485,21 +3575,22 @@ struct Index {
     .height(48)
     .width('100%')
     .padding({ left: 12, right: 10 })
-    .backgroundColor('#F9FAF7')
-    .borderRadius(8)
+    .backgroundColor(GLASS_SOFT)
+    .borderRadius(18)
+    .border({ width: 1, color: LINE_SOFT })
   }
   @Builder
   private TabBar() {
     Row({ space: 6 }) {
       ForEach(TABS, (item: TabItem) => {
         Button(item.label)
-          .height(52)
+          .height(56)
           .layoutWeight(1)
-          .fontSize(15)
+          .fontSize(14)
           .fontWeight(FontWeight.Bold)
-          .fontColor(this.activeTab === item.index ? '#FFFFFF' : MUTED)
-          .backgroundColor(this.activeTab === item.index ? INK : '#EEF2EA')
-          .borderRadius(8)
+          .fontColor(this.activeTab === item.index ? GREEN_DEEP : MUTED)
+          .backgroundColor(this.activeTab === item.index ? GLASS_GREEN : '#00000000')
+          .borderRadius(22)
           .opacity(this.actionOpacity())
           .onClick(() => {
             this.switchTab(item.index);
@@ -3507,11 +3598,12 @@ struct Index {
       }, (item: TabItem) => item.label)
     }
     .width('100%')
-    .padding(10)
+    .height(78)
+    .padding({ left: 12, right: 12, top: 10, bottom: 10 })
     .margin({ left: 18, right: 18, bottom: 18 })
-    .backgroundColor('#FDFEFB')
-    .borderRadius(8)
-    .border({ width: 1, color: LINE })
-    .shadow({ radius: 12, color: '#1F000000', offsetY: 4 })
+    .backgroundColor(GLASS)
+    .borderRadius(30)
+    .border({ width: 1, color: BORDER_GLASS })
+    .shadow({ radius: 30, color: SHADOW_BLUE, offsetY: 12 })
   }
 }
