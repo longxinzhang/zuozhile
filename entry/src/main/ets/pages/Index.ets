@@ -93,8 +93,7 @@ const TABS: TabItem[] = [
   { index: 0, label: '守护' },
   { index: 1, label: '统计' },
   { index: 2, label: '指南' },
-  { index: 3, label: '调试' },
-  { index: 4, label: '设置' }
+  { index: 3, label: '设置' }
 ];
 const DEBUG_TABS: DebugSubTabItem[] = [
   { index: 0, label: '检测日志' },
@@ -149,6 +148,7 @@ struct Index {
   @State private loaded: boolean = false;
   @State private activeTab: number = 0;
   @State private activeDebugTab: number = 0;
+  @State private showDebugPanel: boolean = false;
   @State private isGuarding: boolean = false;
   @State private isStartingGuard: boolean = false;
   @State private isStoppingGuard: boolean = false;
@@ -1137,10 +1137,10 @@ struct Index {
     this.calibrationProgressPercent = Math.max(0, Math.min(100, Math.round(percent)));
   }
   private calibrationProgressColor(): string {
-    return this.isCalibrationProgressHealthy ? BLUE : RED;
+    return this.isCalibrationProgressHealthy ? GREEN : RED;
   }
   private calibrationProgressSoftColor(): string {
-    return this.isCalibrationProgressHealthy ? '#EAF1FF' : RED_SOFT;
+    return this.isCalibrationProgressHealthy ? GREEN_SOFT : RED_SOFT;
   }
   private calibrationProgressPercentText(): string {
     return this.calibrationProgressPercent.toString() + '%';
@@ -1541,11 +1541,120 @@ struct Index {
     }
     return '标准';
   }
+  private isFinishedUiState(): boolean {
+    return this.sessionReportTitle.length > 0 && !this.isGuarding && !this.isStartingGuard && !this.isStoppingGuard;
+  }
+  private isIdleUiState(): boolean {
+    return !this.isGuarding && !this.isStartingGuard && !this.isStoppingGuard && !this.isFinishedUiState();
+  }
+  private headerStatusText(): string {
+    if (this.isStartingGuard) {
+      return '前台守护启动中';
+    }
+    if (this.isStoppingGuard) {
+      return '正在结束守护';
+    }
+    if (this.isGuarding) {
+      return '前台守护中';
+    }
+    if (this.isFinishedUiState()) {
+      return '本次守护已结束';
+    }
+    return '前台守护未开启';
+  }
+  private headerSwitchText(): string {
+    if (this.isGuarding) {
+      return '守护中';
+    }
+    if (this.isFinishedUiState()) {
+      return '已结束';
+    }
+    return '未开启';
+  }
+  private headerStatusColor(): string {
+    if (this.isGuarding || this.isFinishedUiState()) {
+      return GREEN_DEEP;
+    }
+    return MUTED;
+  }
+  private heroTitleText(): string {
+    if (this.isIdleUiState()) {
+      return '等待开始守护';
+    }
+    if (this.isFinishedUiState()) {
+      return '本次守护已结束';
+    }
+    if (this.summary === '采样失败' || this.summary === '需要相机权限' || this.summary === '相机不可用' ||
+      this.summary === '预览未就绪') {
+      return this.summary;
+    }
+    return '坐姿在线';
+  }
+  private heroDetailText(): string {
+    if (this.isIdleUiState()) {
+      return '开启后将每 ' + this.intervalLabel(this.settings.profile.sampleIntervalMs) + '低频抽帧识别';
+    }
+    if (this.isFinishedUiState()) {
+      return this.sessionReportMeta.length > 0 ? this.sessionReportMeta : '已生成本次守护报告';
+    }
+    return '上次采样 ' + this.lastSampleText + ' · ' + this.intervalLabel(this.settings.profile.sampleIntervalMs) + ' 抽帧';
+  }
+  private heroScoreText(): string {
+    if (this.isIdleUiState()) {
+      return '--';
+    }
+    if (this.isFinishedUiState()) {
+      return this.sessionReportScore > 0 ? this.sessionReportScore.toString() : '--';
+    }
+    return this.score.toString();
+  }
+  private heroScoreColor(): string {
+    if (this.isIdleUiState()) {
+      return '#A9B1AD';
+    }
+    if (this.isFinishedUiState() && this.sessionReportScore > 0) {
+      return scoreColor(this.sessionReportScore);
+    }
+    return scoreColor(this.score);
+  }
+  private heroProgressValue(): number {
+    if (this.isIdleUiState()) {
+      return 0;
+    }
+    if (this.isFinishedUiState()) {
+      return Math.max(0, this.sessionReportScore);
+    }
+    return Math.max(0, this.score);
+  }
+  private heroStatusLabel(): string {
+    if (this.isIdleUiState()) {
+      return '暂无实时数据';
+    }
+    if (this.isFinishedUiState()) {
+      return this.sessionReportScore >= 85 ? '整体稳定' : '已生成报告';
+    }
+    if (this.reminderAction === ReminderAction.NONE) {
+      return this.score >= 85 ? '状态良好' : '继续观察';
+    }
+    return this.reminderText;
+  }
+  private todayInsightText(): string {
+    const stats = this.todayStats();
+    if (stats.sampleCount === 0) {
+      return '今天还没有采样，开始守护后会生成状态总结。';
+    }
+    const issues = this.alertBreakdown();
+    if (issues.length === 0) {
+      return '今天整体稳定，继续保持当前坐姿节奏。';
+    }
+    return '今天最明显的问题是' + alertTypeLabel(issues[0].type) + '，建议优先调整桌椅和屏幕位置。';
+  }
   build() {
     if (!this.loaded) {
       this.LoadingView()
     } else {
       Stack() {
+        this.BackgroundGlow()
         if (this.settings.useCoreVision) {
           this.CameraSurfaceHost()
         }
@@ -1572,6 +1681,27 @@ struct Index {
       .height('100%')
       .backgroundColor(APP_BG)
     }
+  }
+  @Builder
+  private BackgroundGlow() {
+    Stack() {
+      Text('')
+        .width(260)
+        .height(260)
+        .backgroundColor('#E0F6EA')
+        .borderRadius(130)
+        .opacity(0.65)
+        .position({ x: 760, y: 120 })
+      Text('')
+        .width(240)
+        .height(240)
+        .backgroundColor('#EAF2FF')
+        .borderRadius(120)
+        .opacity(0.55)
+        .position({ x: -80, y: 1740 })
+    }
+    .width('100%')
+    .height('100%')
   }
   @Builder
   private LoadingView() {
@@ -1601,7 +1731,7 @@ struct Index {
         } else if (this.activeTab === 2) {
           this.GuidePage()
         } else if (this.activeTab === 3) {
-          this.DebugPage()
+          this.SettingsPage()
         } else {
           this.SettingsPage()
         }
@@ -1617,7 +1747,7 @@ struct Index {
     Row() {
       Column({ space: 6 }) {
         Text('坐直了')
-          .fontSize(34)
+          .fontSize(30)
           .fontWeight(FontWeight.Bold)
           .fontColor(INK)
         Row({ space: 6 }) {
@@ -1626,19 +1756,19 @@ struct Index {
             .height(8)
             .backgroundColor(this.isGuarding ? GREEN : MUTED)
             .borderRadius(4)
-          Text(this.isGuarding ? '前台守护中' : '前台守护待开启')
+          Text(this.headerStatusText())
             .fontSize(14)
             .fontWeight(FontWeight.Bold)
-            .fontColor(this.isGuarding ? GREEN_DEEP : MUTED)
+            .fontColor(this.headerStatusColor())
         }
       }
       .alignItems(HorizontalAlign.Start)
       .layoutWeight(1)
       Row({ space: 8 }) {
-        Text(this.isGuarding ? '守护中' : '未开启')
+        Text(this.headerSwitchText())
           .fontSize(13)
           .fontWeight(FontWeight.Bold)
-          .fontColor(this.isGuarding ? GREEN_DEEP : MUTED)
+          .fontColor(this.headerStatusColor())
         Text('')
           .width(28)
           .height(18)
@@ -1666,87 +1796,101 @@ struct Index {
   }
   @Builder
   private ScorePanel() {
-    Column({ space: 14 }) {
-      Row() {
-        Column({ space: 8 }) {
-          Row({ space: 8 }) {
-            Text('')
-              .width(18)
-              .height(18)
-              .backgroundColor(scoreColor(this.score))
-              .borderRadius(9)
-            Text(this.summary)
-              .fontSize(22)
-              .fontWeight(FontWeight.Bold)
-              .fontColor(INK)
+    Stack() {
+      Text('')
+        .width(150)
+        .height(150)
+        .backgroundColor('#DCF7EA')
+        .borderRadius(75)
+        .position({ x: 250, y: 0 })
+      Column({ space: 10 }) {
+        Row() {
+          Column({ space: 8 }) {
+            Row({ space: 8 }) {
+              Text('')
+              .width(26)
+              .height(26)
+                .backgroundColor(this.isIdleUiState() ? '#DDE6DF' : GREEN)
+                .borderRadius(9)
+              Text(this.heroTitleText())
+                .fontSize(20)
+                .fontWeight(FontWeight.Bold)
+                .fontColor(INK)
+                .maxLines(1)
+                .layoutWeight(1)
+            }
+            .width('100%')
+            Text(this.heroDetailText())
+              .fontSize(13)
+              .fontColor(MUTED)
               .maxLines(1)
+            Text('综合评分')
+              .fontSize(14)
+              .fontWeight(FontWeight.Bold)
+              .fontColor(MUTED)
+              .margin({ top: 8 })
+            if (this.summary === '采样失败' && this.isGuarding) {
+              Text(this.sourceDetail)
+                .fontSize(12)
+                .fontColor(RED)
+                .lineHeight(18)
+                .maxLines(2)
+            }
           }
-          Text('上次采样 ' + this.lastSampleText + ' · ' + this.intervalLabel(this.settings.profile.sampleIntervalMs) + ' 抽帧')
-            .fontSize(13)
-            .fontColor(MUTED)
-            .maxLines(1)
-          Text('综合评分')
-            .fontSize(14)
-            .fontWeight(FontWeight.Bold)
-            .fontColor(MUTED)
-            .margin({ top: 8 })
-          if (this.summary === '采样失败') {
-            Text(this.sourceDetail)
-              .fontSize(12)
-              .fontColor(RED)
-              .lineHeight(18)
-              .maxLines(3)
+          .alignItems(HorizontalAlign.Start)
+          .layoutWeight(1)
+          Stack() {
+            Text('')
+              .width(98)
+              .height(98)
+              .backgroundColor('#E5F8EE')
+              .borderRadius(49)
+              .border({ width: 1, color: '#FFFFFF' })
+              .shadow({ radius: 24, color: SHADOW_GREEN, offsetY: 8 })
+            Text(this.heroScoreText())
+              .width(98)
+              .height(98)
+              .fontSize(this.isIdleUiState() ? 34 : 44)
+              .fontWeight(FontWeight.Bold)
+              .fontColor(this.heroScoreColor())
+              .textAlign(TextAlign.Center)
+              .lineHeight(98)
           }
-        }
-        .alignItems(HorizontalAlign.Start)
-        .layoutWeight(1)
-        Stack() {
-          Text('')
-            .width(106)
-            .height(106)
-            .backgroundColor(GLASS_GREEN)
-            .borderRadius(53)
-          Text(this.score.toString())
-            .width(106)
-            .height(106)
-            .fontSize(48)
-            .fontWeight(FontWeight.Bold)
-            .fontColor(scoreColor(this.score))
-            .textAlign(TextAlign.Center)
-            .lineHeight(106)
-        }
-        .width(116)
-        .height(116)
-      }
-      .width('100%')
-      Column({ space: 8 }) {
-        Row() {
-          Text('综合评分')
-            .fontSize(13)
-            .fontColor(MUTED)
-          Blank()
-          Text(this.reminderText)
-            .fontSize(13)
-            .fontWeight(FontWeight.Bold)
-            .fontColor(reminderColor(this.reminderAction))
+          .width(104)
+          .height(104)
         }
         .width('100%')
-        Row() {
-          Text('')
-            .height(10)
-            .width(this.score.toString() + '%')
-            .backgroundColor(scoreColor(this.score))
-            .borderRadius(5)
+        Column({ space: 8 }) {
+          Row() {
+            Blank()
+            Text(this.heroStatusLabel())
+              .fontSize(13)
+              .fontWeight(FontWeight.Bold)
+              .fontColor(this.isIdleUiState() ? MUTED : this.heroScoreColor())
+          }
+          .width('100%')
+          Row() {
+            if (this.heroProgressValue() > 0) {
+              Text('')
+                .height(10)
+                .width(this.heroProgressValue().toString() + '%')
+                .backgroundColor(this.heroScoreColor())
+                .borderRadius(5)
+            }
+          }
+          .width('100%')
+          .height(10)
+          .backgroundColor('#E4EAE2')
+          .borderRadius(5)
         }
         .width('100%')
-        .height(10)
-        .backgroundColor('#E4EAE2')
-        .borderRadius(5)
       }
       .width('100%')
+      .height('100%')
+      .padding(18)
     }
     .width('100%')
-    .padding(20)
+    .height(172)
     .backgroundColor(GLASS_GREEN)
     .borderRadius(28)
     .border({ width: 1, color: BORDER_GLASS })
@@ -1994,43 +2138,62 @@ struct Index {
   @Builder
   private MetricGrid() {
     Row({ space: 10 }) {
-      this.MetricTile('坐姿', this.sitLevel, this.sitLabel, this.sitValue.toString() + '%')
-      this.MetricTile('抬头', this.chinLevel, this.chinLabel, this.chinValue.toString() + '°')
-      this.MetricTile('嘴巴', this.mouthLevel, this.mouthLabel, this.mouthValue.toString())
+      if (this.isIdleUiState()) {
+        this.MetricTile('坐姿', '待识别', BLUE, BLUE_SOFT, '未识别上半', '--', 1)
+        this.MetricTile('抬头', '待识别', BLUE, BLUE_SOFT, '未识别人脸', '--', 3)
+        this.MetricTile('嘴巴', '待识别', BLUE, BLUE_SOFT, '嘴部未识别', '--', 11)
+      } else if (this.isFinishedUiState()) {
+        this.MetricTile('坐姿', '总结', GREEN, GREEN_SOFT, '报告已生成',
+          this.sessionReportScore > 0 ? this.sessionReportScore.toString() + '分' : '--', 1)
+        this.MetricTile('抬头', '建议', GREEN, GREEN_SOFT, '查看统计', '--', 3)
+        this.MetricTile('嘴巴', '完成', GREEN, GREEN_SOFT, '建议已更新', '--', 11)
+      } else {
+        this.MetricTile('坐姿', levelText(this.sitLevel), levelColor(this.sitLevel), levelSoftColor(this.sitLevel),
+          this.sitLabel, this.sitValue.toString() + '%', 1)
+        this.MetricTile('抬头', levelText(this.chinLevel), levelColor(this.chinLevel), levelSoftColor(this.chinLevel),
+          this.chinLabel, this.chinValue.toString() + '°', 3)
+        this.MetricTile('嘴巴', levelText(this.mouthLevel), levelColor(this.mouthLevel), levelSoftColor(this.mouthLevel),
+          this.mouthLabel, this.mouthValue.toString(), 11)
+      }
     }
     .width('100%')
   }
   @Builder
-  private MetricTile(title: string, level: PostureLevel, label: string, value: string) {
-    Column({ space: 8 }) {
+  private MetricTile(title: string, status: string, color: string, softColor: string, label: string, value: string,
+    iconId: number) {
+    Column({ space: 7 }) {
       Row() {
         Text(title)
           .fontSize(15)
           .fontWeight(FontWeight.Bold)
           .fontColor(INK)
         Blank()
-        Text(levelText(level))
+        Text(status)
           .width(48)
           .height(26)
           .fontSize(11)
           .fontWeight(FontWeight.Bold)
-          .fontColor(levelColor(level))
+          .fontColor(color)
           .textAlign(TextAlign.Center)
           .lineHeight(26)
-          .backgroundColor(levelSoftColor(level))
+          .backgroundColor(softColor)
           .borderRadius(13)
       }
       .width('100%')
+      Image(this.guideCorrectResource(iconId))
+        .width(28)
+        .height(28)
+        .objectFit(ImageFit.Contain)
       Text(label)
-        .fontSize(16)
+        .fontSize(15)
         .fontWeight(FontWeight.Bold)
         .fontColor(INK)
         .maxLines(1)
       Row() {
         Text(value)
-          .fontSize(15)
+          .fontSize(18)
           .fontWeight(FontWeight.Bold)
-          .fontColor(levelColor(level))
+          .fontColor(color)
         Blank()
         Text('›')
           .fontSize(18)
@@ -2039,11 +2202,11 @@ struct Index {
       }
       .width('100%')
     }
-    .height(126)
+    .height(116)
     .layoutWeight(1)
     .alignItems(HorizontalAlign.Start)
     .justifyContent(FlexAlign.SpaceBetween)
-    .padding(14)
+    .padding(13)
     .backgroundColor(GLASS)
     .borderRadius(22)
     .border({ width: 1, color: LINE_SOFT })
@@ -2053,7 +2216,7 @@ struct Index {
   private GuardActions() {
     Column({ space: 10 }) {
       Button(this.guardButtonText())
-        .height(58)
+        .height(54)
         .width('100%')
         .fontSize(19)
         .fontWeight(FontWeight.Bold)
@@ -2072,13 +2235,16 @@ struct Index {
             this.startGuard();
           }
         })
-      if (this.sessionReportTitle.length > 0 && !this.isGuarding && !this.isStartingGuard) {
+      if (this.isFinishedUiState()) {
         this.SessionReportCard()
+      } else if (this.isIdleUiState()) {
+        this.IdleHintCard()
+      } else {
+        this.PostureInsightCard()
       }
-      this.PostureInsightCard()
       Row({ space: 10 }) {
         Button(this.isManualOperation ? '处理中' : '记录基线')
-          .height(52)
+          .height(48)
           .layoutWeight(1)
           .fontSize(15)
           .fontWeight(FontWeight.Bold)
@@ -2092,7 +2258,7 @@ struct Index {
             this.calibrateFromCurrent();
           })
         Button(this.isManualOperation ? '处理中' : '抽样一次')
-          .height(52)
+          .height(48)
           .layoutWeight(1)
           .fontSize(15)
           .fontWeight(FontWeight.Bold)
@@ -2168,6 +2334,59 @@ struct Index {
     .padding(16)
     .backgroundColor(GLASS)
     .borderRadius(22)
+    .border({ width: 1, color: BORDER_GLASS })
+    .shadow({ radius: 18, color: SHADOW_CARD, offsetY: 8 })
+  }
+  @Builder
+  private IdleHintCard() {
+    Row({ space: 14 }) {
+      Stack() {
+        Image(this.guideCorrectResource(1))
+          .width('86%')
+          .height('86%')
+          .objectFit(ImageFit.Contain)
+      }
+      .width(84)
+      .height(92)
+      .backgroundColor(GLASS_GREEN)
+      .borderRadius(20)
+      Column({ space: 8 }) {
+        Row({ space: 8 }) {
+          Text('待机')
+            .width(44)
+            .height(26)
+            .fontSize(12)
+            .fontWeight(FontWeight.Bold)
+            .fontColor(GREEN_DEEP)
+            .textAlign(TextAlign.Center)
+            .lineHeight(26)
+            .backgroundColor(GREEN_SOFT)
+            .borderRadius(13)
+          Text('准备开始守护')
+            .fontSize(18)
+            .fontWeight(FontWeight.Bold)
+            .fontColor(INK)
+            .maxLines(1)
+        }
+        Text('开启后会在这里显示实时识别建议；图像只在本机用于姿态判断。')
+          .fontSize(14)
+          .fontColor(MUTED)
+          .lineHeight(20)
+          .maxLines(2)
+        Text('低频抽帧 · 本机识别 · 不展示实时画面')
+          .fontSize(12)
+          .fontWeight(FontWeight.Bold)
+          .fontColor(GREEN)
+          .maxLines(1)
+      }
+      .alignItems(HorizontalAlign.Start)
+      .layoutWeight(1)
+    }
+    .height(120)
+    .width('100%')
+    .padding(12)
+    .backgroundColor(GLASS)
+    .borderRadius(24)
     .border({ width: 1, color: BORDER_GLASS })
     .shadow({ radius: 18, color: SHADOW_CARD, offsetY: 8 })
   }
@@ -2326,6 +2545,9 @@ struct Index {
     }
     if (this.isStoppingGuard) {
       return '停止中';
+    }
+    if (this.isFinishedUiState()) {
+      return '重新开始守护';
     }
     return this.isGuarding ? '结束守护' : '开始守护';
   }
@@ -2519,6 +2741,15 @@ struct Index {
         SmallCounter({ label: '纠正', value: this.todayStats().badCount, color: RED })
       }
       .width('100%')
+      Text(this.todayInsightText())
+        .fontSize(14)
+        .fontColor(MUTED)
+        .lineHeight(20)
+        .width('100%')
+        .padding({ left: 12, right: 12, top: 10, bottom: 10 })
+        .backgroundColor(GLASS_SOFT)
+        .borderRadius(16)
+        .border({ width: 1, color: LINE_SOFT })
     }
     .width('100%')
     .padding(16)
@@ -3260,6 +3491,7 @@ struct Index {
       this.CalibrationPanel()
       this.SamplingPanel()
       this.PrivacyPanel()
+      this.DeveloperDebugPanel()
       Button('清空本机数据')
         .height(48)
         .width('100%')
@@ -3347,7 +3579,7 @@ struct Index {
           .fontSize(15)
           .fontWeight(FontWeight.Bold)
           .fontColor('#FFFFFF')
-          .backgroundColor(BLUE)
+          .backgroundColor(GREEN)
           .borderRadius(20)
           .opacity(this.actionOpacity())
           .onClick(() => {
@@ -3423,9 +3655,9 @@ struct Index {
       .height(48)
       .layoutWeight(1)
       .padding({ left: 14, right: 14 })
-      .backgroundColor(this.isSensitivitySelected(value) ? BLUE : GLASS_SOFT)
+      .backgroundColor(this.isSensitivitySelected(value) ? GREEN : GLASS_SOFT)
       .borderRadius(20)
-      .border({ width: 1, color: this.isSensitivitySelected(value) ? BLUE : LINE_SOFT })
+      .border({ width: 1, color: this.isSensitivitySelected(value) ? GREEN : LINE_SOFT })
       .opacity(this.actionOpacity())
       .onClick(() => {
         this.setSensitivity(value);
@@ -3578,6 +3810,46 @@ struct Index {
     .backgroundColor(GLASS_SOFT)
     .borderRadius(18)
     .border({ width: 1, color: LINE_SOFT })
+  }
+  @Builder
+  private DeveloperDebugPanel() {
+    Column({ space: 10 }) {
+      Row() {
+        Column({ space: 4 }) {
+          Text('开发者调试')
+            .fontSize(18)
+            .fontWeight(FontWeight.Bold)
+            .fontColor(INK)
+          Text('检测日志、精度校准和参数视图')
+            .fontSize(13)
+            .fontColor(MUTED)
+            .maxLines(1)
+        }
+        .layoutWeight(1)
+        Button(this.showDebugPanel ? '收起' : '展开')
+          .width(76)
+          .height(34)
+          .fontSize(13)
+          .fontWeight(FontWeight.Bold)
+          .fontColor(this.showDebugPanel ? MUTED : GREEN_DEEP)
+          .backgroundColor(this.showDebugPanel ? GLASS_SOFT : GREEN_SOFT)
+          .borderRadius(17)
+          .border({ width: 1, color: LINE_SOFT })
+          .onClick(() => {
+            this.showDebugPanel = !this.showDebugPanel;
+          })
+      }
+      .width('100%')
+      if (this.showDebugPanel) {
+        this.DebugPage()
+      }
+    }
+    .width('100%')
+    .padding(16)
+    .backgroundColor(GLASS)
+    .borderRadius(24)
+    .border({ width: 1, color: BORDER_GLASS })
+    .shadow({ radius: 18, color: SHADOW_CARD, offsetY: 8 })
   }
   @Builder
   private TabBar() {
