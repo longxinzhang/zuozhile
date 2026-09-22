@@ -2,9 +2,9 @@ import { GLASS_SOFT, INK, LINE_SOFT, MUTED, SHADOW_CARD } from '../theme/ZuozhiT
 
 @Component
 export struct StatTile {
-  label: string = '';
-  value: string = '';
-  color: string = INK;
+  @Prop label: string = '';
+  @Prop value: string = '';
+  @Prop color: string = INK;
 
   build() {
     Column({ space: 6 }) {
@@ -27,9 +27,9 @@ export struct StatTile {
 
 @Component
 export struct SmallCounter {
-  label: string = '';
-  value: number = 0;
-  color: string = INK;
+  @Prop label: string = '';
+  @Prop value: number = 0;
+  @Prop color: string = INK;
 
   build() {
     Row() {
@@ -50,8 +50,8 @@ export struct SmallCounter {
 
 @Component
 export struct BaselineTile {
-  label: string = '';
-  value: string = '';
+  @Prop label: string = '';
+  @Prop value: string = '';
 
   build() {
     Column({ space: 5 }) {

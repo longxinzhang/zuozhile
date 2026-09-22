@@ -23,6 +23,7 @@ import {
 } from '../models/PostureTypes';
 import { PostureSessionStore } from '../services/PostureSessionStore';
 import { BaselineTile, SmallCounter, StatTile } from '../components/StatusTiles';
+import { PostureMetricTile } from '../components/PostureMetricTile';
 import { MockPostureSource } from '../services/MockPostureSource';
 import { CoreVisionPostureSource } from '../services/CoreVisionPostureSource';
 import { GuardWindowService } from '../services/GuardWindowService';
@@ -1552,12 +1553,40 @@ struct Index {
   private isIdleUiState(): boolean {
     return !this.isGuarding && !this.isStartingGuard && !this.isStoppingGuard && !this.isFinishedUiState();
   }
+  private isDetectionErrorUiState(): boolean {
+    return !this.isStartingGuard && !this.isStoppingGuard && !this.isFinishedUiState() &&
+      (this.summary === '采样失败' || this.summary === '需要相机权限' || this.summary === '相机不可用' ||
+        this.summary === '预览未就绪');
+  }
+  private async retryDetection(): Promise<void> {
+    if (this.controlsLocked()) {
+      return;
+    }
+    const pageRunId = this.pageRunId;
+    try {
+      if (this.isGuarding) {
+        await this.stopGuard(true, false);
+      }
+      if (!this.isCurrentPageRun(pageRunId)) {
+        return;
+      }
+      this.summary = '正在准备检测';
+      await this.startGuard();
+    } catch (error) {
+      if (this.isCurrentPageRun(pageRunId)) {
+        this.summary = '相机不可用';
+      }
+    }
+  }
   private headerStatusText(): string {
     if (this.isStartingGuard) {
       return '前台守护启动中';
     }
     if (this.isStoppingGuard) {
       return '正在结束守护';
+    }
+    if (this.isDetectionErrorUiState()) {
+      return '检测暂不可用';
     }
     if (this.isGuarding) {
       return '前台守护中';
@@ -1568,6 +1597,9 @@ struct Index {
     return '前台守护未开启';
   }
   private headerSwitchText(): string {
+    if (this.isDetectionErrorUiState()) {
+      return '待恢复';
+    }
     if (this.isGuarding) {
       return '守护中';
     }
@@ -1577,15 +1609,17 @@ struct Index {
     return '未开启';
   }
   private headerStatusColor(): string {
+    if (this.isDetectionErrorUiState()) {
+      return RED;
+    }
     if (this.isGuarding || this.isFinishedUiState()) {
       return GREEN_DEEP;
     }
     return MUTED;
   }
   private heroTitleText(): string {
-    if (this.summary === '采样失败' || this.summary === '需要相机权限' || this.summary === '相机不可用' ||
-      this.summary === '预览未就绪') {
-      return this.summary;
+    if (this.isDetectionErrorUiState()) {
+      return this.summary === '需要相机权限' ? '需要相机权限' : '检测暂时中断';
     }
     if (this.isStartingGuard || this.isGuarding && !this.hasCurrentReading()) {
       return '正在准备检测';
@@ -1609,11 +1643,8 @@ struct Index {
       this.chinLevel === PostureLevel.UNKNOWN && this.mouthLevel === PostureLevel.UNKNOWN;
   }
   private heroDetailText(): string {
-    if (this.summary === '需要相机权限') {
-      return '需要相机权限才能识别坐姿';
-    }
-    if (this.summary === '相机不可用' || this.summary === '预览未就绪' || this.summary === '采样失败') {
-      return '检测暂不可用，请检查相机后重试';
+    if (this.isDetectionErrorUiState()) {
+      return this.summary === '需要相机权限' ? '授权相机后才能识别坐姿' : '请重新开启检测，恢复后继续显示姿态';
     }
     if (this.isIdleUiState()) {
       return '给专注的时光，一点温柔提醒';
@@ -1631,7 +1662,7 @@ struct Index {
   }
   private heroScoreText(): string {
     if (this.isIdleUiState() || this.isStartingGuard || this.isGuarding && !this.hasCurrentReading() ||
-      this.isUnrecognizedUiState()) {
+      this.isUnrecognizedUiState() || this.isDetectionErrorUiState()) {
       return '--';
     }
     if (this.isFinishedUiState()) {
@@ -1640,6 +1671,9 @@ struct Index {
     return this.score.toString();
   }
   private heroScoreColor(): string {
+    if (this.isDetectionErrorUiState()) {
+      return RED;
+    }
     if (this.isIdleUiState() || this.isStartingGuard || this.isGuarding && !this.hasCurrentReading() ||
       this.isUnrecognizedUiState()) {
       return '#A9B1AD';
@@ -1651,7 +1685,7 @@ struct Index {
   }
   private heroProgressValue(): number {
     if (this.isIdleUiState() || this.isStartingGuard || this.isGuarding && !this.hasCurrentReading() ||
-      this.isUnrecognizedUiState()) {
+      this.isUnrecognizedUiState() || this.isDetectionErrorUiState()) {
       return 0;
     }
     if (this.isFinishedUiState()) {
@@ -1660,6 +1694,9 @@ struct Index {
     return Math.max(0, this.score);
   }
   private heroStatusLabel(): string {
+    if (this.isDetectionErrorUiState()) {
+      return '等待恢复';
+    }
     if (this.isIdleUiState()) {
       return '暂无实时数据';
     }
@@ -1795,7 +1832,8 @@ struct Index {
           Text(this.headerSwitchText())
             .fontSize(12)
             .fontColor(this.headerStatusColor())
-          SymbolGlyph(this.isGuarding ? $r('sys.symbol.camera_fill') : $r('sys.symbol.camera_slash_fill'))
+          SymbolGlyph(this.isGuarding && !this.isDetectionErrorUiState() ?
+            $r('sys.symbol.camera_fill') : $r('sys.symbol.camera_slash_fill'))
             .fontSize(18)
             .fontColor([this.headerStatusColor()])
         }
@@ -1867,9 +1905,6 @@ struct Index {
           .maxLines(2)
       }
       .width('100%')
-      if (this.summary === '采样失败' && this.isGuarding) {
-        Text(this.sourceDetail).fontSize(12).fontColor(RED).maxLines(2).width('100%')
-      }
     }
     .width('100%')
     .padding(20)
@@ -2121,72 +2156,40 @@ struct Index {
   @Builder
   private MetricGrid() {
     Row({ space: 8 }) {
-      if (this.isIdleUiState() || this.isStartingGuard || this.isGuarding && !this.hasCurrentReading()) {
-        this.MetricTile('坐姿', '待识别', MUTED, GLASS_SOFT, '肩颈与躯干', '--', 1)
-        this.MetricTile('抬头', '待识别', BLUE, BLUE_SOFT, '未识别人脸', '--', 3)
-        this.MetricTile('嘴巴', '待识别', BLUE, BLUE_SOFT, '嘴部未识别', '--', 11)
+      if (this.isDetectionErrorUiState()) {
+        PostureMetricTile({ title: '坐姿', status: '暂停', label: '等待恢复检测', icon: this.guideCorrectResource(1) })
+        PostureMetricTile({ title: '抬头', status: '暂停', label: '等待恢复检测', icon: this.guideCorrectResource(3) })
+        PostureMetricTile({ title: '嘴巴', status: '暂停', label: '等待恢复检测', icon: this.guideCorrectResource(11) })
+      } else if (this.isIdleUiState() || this.isStartingGuard || this.isGuarding && !this.hasCurrentReading()) {
+        PostureMetricTile({ title: '坐姿', status: '待识别', label: '肩颈与躯干', icon: this.guideCorrectResource(1) })
+        PostureMetricTile({ title: '抬头', status: '待识别', color: BLUE, softColor: BLUE_SOFT,
+          label: '未识别人脸', icon: this.guideCorrectResource(3) })
+        PostureMetricTile({ title: '嘴巴', status: '待识别', color: BLUE, softColor: BLUE_SOFT,
+          label: '嘴部未识别', icon: this.guideCorrectResource(11) })
       } else if (this.isFinishedUiState()) {
-        this.MetricTile('坐姿', '总结', GREEN, GREEN_SOFT, '报告已生成',
-          this.sessionReportScore > 0 ? this.sessionReportScore.toString() + '分' : '--', 1)
-        this.MetricTile('抬头', '建议', GREEN, GREEN_SOFT, '查看统计', '--', 3)
-        this.MetricTile('嘴巴', '完成', GREEN, GREEN_SOFT, '建议已更新', '--', 11)
+        PostureMetricTile({ title: '坐姿', status: '总结', color: GREEN, softColor: GREEN_SOFT, label: '报告已生成',
+          value: this.sessionReportScore > 0 ? this.sessionReportScore.toString() + '分' : '--',
+          icon: this.guideCorrectResource(1) })
+        PostureMetricTile({ title: '抬头', status: '建议', color: GREEN, softColor: GREEN_SOFT,
+          label: '查看统计', icon: this.guideCorrectResource(3) })
+        PostureMetricTile({ title: '嘴巴', status: '完成', color: GREEN, softColor: GREEN_SOFT,
+          label: '建议已更新', icon: this.guideCorrectResource(11) })
       } else {
-        this.MetricTile('坐姿', levelText(this.sitLevel), levelColor(this.sitLevel), levelSoftColor(this.sitLevel),
-          this.sitLabel, this.sitLevel === PostureLevel.UNKNOWN ? '--' : this.sitValue.toString() + '%', 1)
-        this.MetricTile('抬头', levelText(this.chinLevel), levelColor(this.chinLevel), levelSoftColor(this.chinLevel),
-          this.chinLabel, this.chinLevel === PostureLevel.UNKNOWN ? '--' : this.chinValue.toString() + '°', 3)
-        this.MetricTile('嘴巴', levelText(this.mouthLevel), levelColor(this.mouthLevel), levelSoftColor(this.mouthLevel),
-          this.mouthLabel, this.mouthLevel === PostureLevel.UNKNOWN ? '--' : this.mouthValue.toString(), 11)
+        PostureMetricTile({ title: '坐姿', status: levelText(this.sitLevel), color: levelColor(this.sitLevel),
+          softColor: levelSoftColor(this.sitLevel), label: this.sitLabel,
+          value: this.sitLevel === PostureLevel.UNKNOWN ? '--' : this.sitValue.toString() + '%',
+          icon: this.guideCorrectResource(1) })
+        PostureMetricTile({ title: '抬头', status: levelText(this.chinLevel), color: levelColor(this.chinLevel),
+          softColor: levelSoftColor(this.chinLevel), label: this.chinLabel,
+          value: this.chinLevel === PostureLevel.UNKNOWN ? '--' : this.chinValue.toString() + '°',
+          icon: this.guideCorrectResource(3) })
+        PostureMetricTile({ title: '嘴巴', status: levelText(this.mouthLevel), color: levelColor(this.mouthLevel),
+          softColor: levelSoftColor(this.mouthLevel), label: this.mouthLabel,
+          value: this.mouthLevel === PostureLevel.UNKNOWN ? '--' : this.mouthValue.toString(),
+          icon: this.guideCorrectResource(11) })
       }
     }
     .width('100%')
-  }
-  @Builder
-  private MetricTile(title: string, status: string, color: string, softColor: string, label: string, value: string,
-    iconId: number) {
-    Column({ space: 7 }) {
-      Row({ space: 4 }) {
-        Text(title)
-          .fontSize(13)
-          .fontColor(MUTED)
-        Blank()
-        Text(status)
-          .fontSize(10)
-          .fontWeight(FontWeight.Bold)
-          .fontColor(color)
-          .padding({ left: 6, right: 6, top: 4, bottom: 4 })
-          .backgroundColor(softColor)
-          .borderRadius(8)
-          .maxLines(1)
-      }
-      .width('100%')
-      Image(this.guideCorrectResource(iconId))
-        .width(38)
-        .height(40)
-        .objectFit(ImageFit.Contain)
-      Text(label)
-        .fontSize(12)
-        .fontColor(INK)
-        .maxLines(2)
-        .height(32)
-        .lineHeight(16)
-      Text(value)
-        .fontSize(22)
-        .minFontSize(16)
-        .maxFontSize(22)
-        .maxLines(1)
-        .fontWeight(FontWeight.Medium)
-        .fontColor(color)
-    }
-    .height(158)
-    .layoutWeight(1)
-    .alignItems(HorizontalAlign.Start)
-    .justifyContent(FlexAlign.SpaceBetween)
-    .padding(12)
-    .backgroundColor(GLASS)
-    .borderRadius(20)
-    .border({ width: 1, color: BORDER_GLASS })
-    .shadow({ radius: 14, color: SHADOW_CARD, offsetY: 5 })
   }
   @Builder
   private GuardActions() {
@@ -2222,6 +2225,8 @@ struct Index {
         })
       if (this.isFinishedUiState()) {
         this.SessionReportCard()
+      } else if (this.isDetectionErrorUiState()) {
+        this.DetectionRecoveryPanel()
       } else if (this.isIdleUiState() || this.isStartingGuard || this.isGuarding && !this.hasCurrentReading() ||
         this.isUnrecognizedUiState()) {
         this.IdleHintCard()
@@ -2230,6 +2235,27 @@ struct Index {
       }
     }
     .width('100%')
+  }
+  @Builder
+  private DetectionRecoveryPanel() {
+    Column({ space: 10 }) {
+      Text(this.summary === '需要相机权限' ? '需要你的相机授权' : '暂时无法获取相机画面')
+        .fontSize(16).fontWeight(FontWeight.Bold).fontColor(INK).width('100%')
+      Text(this.summary === '需要相机权限' ? '再次开启检测时，请允许使用相机。' :
+        '如有其他应用正在使用相机，请先结束使用，再重新开启检测。')
+        .fontSize(13).fontColor(MUTED).lineHeight(19).width('100%')
+      Button() {
+        Row({ space: 8 }) {
+          SymbolGlyph($r('sys.symbol.arrow_clockwise')).fontSize(18).fontColor([GREEN_DEEP])
+          Text('重新开启检测').fontSize(14).fontWeight(FontWeight.Bold).fontColor(GREEN_DEEP)
+        }
+      }
+      .width('100%').height(44).backgroundColor(GREEN_SOFT)
+      .enabled(!this.controlsLocked())
+      .accessibilityText('重新开启检测')
+      .onClick(() => { this.retryDetection(); })
+    }
+    .width('100%').padding({ top: 8, bottom: 8 }).alignItems(HorizontalAlign.Start)
   }
   @Builder
   private SessionReportCard() {
