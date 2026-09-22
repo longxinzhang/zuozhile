@@ -10,3 +10,4 @@ local.properties
 zuozhile-*.json
 zuozhile-*.jpeg
 zuozhile-*.png
+/artifacts/preview-*/

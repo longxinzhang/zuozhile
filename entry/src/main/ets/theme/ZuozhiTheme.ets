@@ -1,11 +1,11 @@
 import { PostureLevel, ReminderAction } from '../models/PostureTypes';
 
 export const SURFACE = '#FFFFFF';
-export const SOFT = '#F6F7F2';
-export const INK = '#171B1A';
-export const MUTED = '#68716E';
-export const LINE = '#DDE3DB';
-export const GREEN = '#167C4A';
+export const SOFT = '#F3F5F8';
+export const INK = '#20252D';
+export const MUTED = '#737D89';
+export const LINE = '#E1E5EB';
+export const GREEN = '#168756';
 export const GREEN_SOFT = '#E8F6EE';
 export const YELLOW = '#B46F00';
 export const YELLOW_SOFT = '#FFF3D7';
@@ -13,21 +13,21 @@ export const RED = '#C23B32';
 export const RED_SOFT = '#FFE9E6';
 export const BLUE = '#2457A6';
 export const BLUE_SOFT = '#EAF1FF';
-export const APP_BG = '#F2F7F3';
-export const APP_BG_MIST = '#EEF6F2';
-export const GLASS = '#FDFEFA';
-export const GLASS_SOFT = '#F8FCF8';
-export const GLASS_GREEN = '#F0FBF5';
+export const APP_BG = '#F1F4F8';
+export const APP_BG_MIST = '#EDF2F6';
+export const GLASS = '#F2FFFFFF';
+export const GLASS_SOFT = '#F5F7FA';
+export const GLASS_GREEN = '#EFF9F3';
 export const GLASS_BLUE = '#EFF6FF';
 export const BORDER_GLASS = '#FFFFFF';
-export const LINE_SOFT = '#E7EEE6';
+export const LINE_SOFT = '#E6EAF0';
 export const GREEN_DEEP = '#0F6B3F';
 export const AMBER_SOFT = '#FFF1CF';
-export const CORAL = '#D9463E';
+export const CORAL = '#EB6155';
 export const CORAL_SOFT = '#FFE7E2';
-export const SHADOW_CARD = '#180F251A';
-export const SHADOW_GREEN = '#2E16834F';
-export const SHADOW_BLUE = '#24528CDC';
+export const SHADOW_CARD = '#10273951';
+export const SHADOW_GREEN = '#2416834F';
+export const SHADOW_BLUE = '#183C608C';
 export const SHADOW_CORAL = '#36D9463E';
 
 export function levelText(level: PostureLevel): string {

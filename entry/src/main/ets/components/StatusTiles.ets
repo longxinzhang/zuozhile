@@ -12,17 +12,16 @@ export struct StatTile {
         .fontSize(12)
         .fontColor(MUTED)
       Text(this.value)
-        .fontSize(22)
+        .fontSize(26)
+        .minFontSize(18)
+        .maxFontSize(26)
+        .maxLines(1)
         .fontWeight(FontWeight.Bold)
         .fontColor(this.color)
     }
     .height(76)
     .layoutWeight(1)
     .justifyContent(FlexAlign.Center)
-    .backgroundColor(GLASS_SOFT)
-    .borderRadius(18)
-    .border({ width: 1, color: LINE_SOFT })
-    .shadow({ radius: 12, color: SHADOW_CARD, offsetY: 5 })
   }
 }
 
@@ -46,9 +45,6 @@ export struct SmallCounter {
     .height(42)
     .layoutWeight(1)
     .padding({ left: 10, right: 10 })
-    .backgroundColor(GLASS_SOFT)
-    .borderRadius(16)
-    .border({ width: 1, color: LINE_SOFT })
   }
 }
 

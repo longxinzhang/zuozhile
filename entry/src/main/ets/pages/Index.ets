@@ -29,6 +29,7 @@ import { GuardWindowService } from '../services/GuardWindowService';
 import { ReminderFeedbackService } from '../services/ReminderFeedbackService';
 import { PostureSource } from '../services/PostureSource';
 import { CameraProbeResult, CameraProbeService } from '../services/CameraProbeService';
+import { ImmersiveSurface } from '../theme/ImmersiveSurface';
 import {
   BLUE,
   APP_BG,
@@ -62,6 +63,7 @@ import {
 interface TabItem {
   index: number;
   label: string;
+  icon: Resource;
 }
 
 interface PostureGuideItem {
@@ -90,10 +92,10 @@ enum DisplayMetricType {
 }
 
 const TABS: TabItem[] = [
-  { index: 0, label: '守护' },
-  { index: 1, label: '统计' },
-  { index: 2, label: '指南' },
-  { index: 3, label: '设置' }
+  { index: 0, label: '守护', icon: $r('sys.symbol.checkmark_shield_fill') },
+  { index: 1, label: '统计', icon: $r('sys.symbol.histogram') },
+  { index: 2, label: '指南', icon: $r('sys.symbol.book_open_fill') },
+  { index: 3, label: '设置', icon: $r('sys.symbol.gearshape_fill') }
 ];
 const DEBUG_TABS: DebugSubTabItem[] = [
   { index: 0, label: '检测日志' },
@@ -143,6 +145,7 @@ const REPORT_ALERT_PRIORITY: PostureAlertType[] = [
 ];
 
 @Entry
+@Preview
 @Component
 struct Index {
   @State private loaded: boolean = false;
@@ -194,6 +197,8 @@ struct Index {
   @State private sessionReportAdvice: string = '';
   @State private sessionReportScore: number = 0;
   @State private debugFeedbackText: string = '';
+  private pageScroller: Scroller = new Scroller();
+  private immersiveSurface: ImmersiveSurface = new ImmersiveSurface();
   private timer: number = -1;
   private hardReminderTimer: number = -1;
   private guardRunId: number = 0;
@@ -201,7 +206,7 @@ struct Index {
   private storageOperationId: number = 0;
   private guardSessionStartedAt: number = 0;
   private isSampling: boolean = false;
-  private lastSample?: PostureSample;
+  @State private lastSample: PostureSample | undefined = undefined;
   private sitCandidateKey: string = '';
   private sitCandidateCount: number = 0;
   private chinCandidateKey: string = '';
@@ -1578,29 +1583,55 @@ struct Index {
     return MUTED;
   }
   private heroTitleText(): string {
-    if (this.isIdleUiState()) {
-      return '等待开始守护';
-    }
-    if (this.isFinishedUiState()) {
-      return '本次守护已结束';
-    }
     if (this.summary === '采样失败' || this.summary === '需要相机权限' || this.summary === '相机不可用' ||
       this.summary === '预览未就绪') {
       return this.summary;
     }
-    return '坐姿在线';
+    if (this.isStartingGuard || this.isGuarding && !this.hasCurrentReading()) {
+      return '正在准备检测';
+    }
+    if (this.isUnrecognizedUiState()) {
+      return '未看清姿态';
+    }
+    if (this.isIdleUiState()) {
+      return '准备好，坐直了';
+    }
+    if (this.isFinishedUiState()) {
+      return '本次守护已结束';
+    }
+    return this.summary;
+  }
+  private hasCurrentReading(): boolean {
+    return this.lastSample !== undefined && this.lastSample.timestamp >= this.guardSessionStartedAt;
+  }
+  private isUnrecognizedUiState(): boolean {
+    return this.isGuarding && this.hasCurrentReading() && this.sitLevel === PostureLevel.UNKNOWN &&
+      this.chinLevel === PostureLevel.UNKNOWN && this.mouthLevel === PostureLevel.UNKNOWN;
   }
   private heroDetailText(): string {
+    if (this.summary === '需要相机权限') {
+      return '需要相机权限才能识别坐姿';
+    }
+    if (this.summary === '相机不可用' || this.summary === '预览未就绪' || this.summary === '采样失败') {
+      return '检测暂不可用，请检查相机后重试';
+    }
     if (this.isIdleUiState()) {
-      return '开启后将每 ' + this.intervalLabel(this.settings.profile.sampleIntervalMs) + '低频抽帧识别';
+      return '给专注的时光，一点温柔提醒';
     }
     if (this.isFinishedUiState()) {
       return this.sessionReportMeta.length > 0 ? this.sessionReportMeta : '已生成本次守护报告';
     }
+    if (this.isStartingGuard || this.isGuarding && !this.hasCurrentReading()) {
+      return '等待首次采样，请保持人脸和双肩入镜';
+    }
+    if (this.isUnrecognizedUiState()) {
+      return '请让人脸和双肩入镜，保持光线充足';
+    }
     return '上次采样 ' + this.lastSampleText + ' · ' + this.intervalLabel(this.settings.profile.sampleIntervalMs) + ' 抽帧';
   }
   private heroScoreText(): string {
-    if (this.isIdleUiState()) {
+    if (this.isIdleUiState() || this.isStartingGuard || this.isGuarding && !this.hasCurrentReading() ||
+      this.isUnrecognizedUiState()) {
       return '--';
     }
     if (this.isFinishedUiState()) {
@@ -1609,7 +1640,8 @@ struct Index {
     return this.score.toString();
   }
   private heroScoreColor(): string {
-    if (this.isIdleUiState()) {
+    if (this.isIdleUiState() || this.isStartingGuard || this.isGuarding && !this.hasCurrentReading() ||
+      this.isUnrecognizedUiState()) {
       return '#A9B1AD';
     }
     if (this.isFinishedUiState() && this.sessionReportScore > 0) {
@@ -1618,7 +1650,8 @@ struct Index {
     return scoreColor(this.score);
   }
   private heroProgressValue(): number {
-    if (this.isIdleUiState()) {
+    if (this.isIdleUiState() || this.isStartingGuard || this.isGuarding && !this.hasCurrentReading() ||
+      this.isUnrecognizedUiState()) {
       return 0;
     }
     if (this.isFinishedUiState()) {
@@ -1632,6 +1665,12 @@ struct Index {
     }
     if (this.isFinishedUiState()) {
       return this.sessionReportScore >= 85 ? '整体稳定' : '已生成报告';
+    }
+    if (this.isStartingGuard || this.isGuarding && !this.hasCurrentReading()) {
+      return '等待采样';
+    }
+    if (this.isUnrecognizedUiState()) {
+      return '等待入镜';
     }
     if (this.reminderAction === ReminderAction.NONE) {
       return this.score >= 85 ? '状态良好' : '继续观察';
@@ -1684,24 +1723,11 @@ struct Index {
   }
   @Builder
   private BackgroundGlow() {
-    Stack() {
-      Text('')
-        .width(260)
-        .height(260)
-        .backgroundColor('#E0F6EA')
-        .borderRadius(130)
-        .opacity(0.65)
-        .position({ x: 760, y: 120 })
-      Text('')
-        .width(240)
-        .height(240)
-        .backgroundColor('#EAF2FF')
-        .borderRadius(120)
-        .opacity(0.55)
-        .position({ x: -80, y: 1740 })
-    }
+    Column() {}
     .width('100%')
     .height('100%')
+    .linearGradient({ angle: 155, colors: [['#F7F9FC', 0], ['#EDF2F6', 0.6], ['#EDF6F1', 1]] })
+    .hitTestBehavior(HitTestMode.None)
   }
   @Builder
   private LoadingView() {
@@ -1721,8 +1747,8 @@ struct Index {
   }
   @Builder
   private PageBody() {
-    Scroll() {
-      Column({ space: 16 }) {
+    Scroll(this.pageScroller) {
+      Column({ space: 20 }) {
         this.Header()
         if (this.activeTab === 0) {
           this.GuardPage()
@@ -1737,56 +1763,54 @@ struct Index {
         }
       }
       .width('100%')
-      .padding({ left: 18, right: 18, top: 18, bottom: 10 })
+      .constraintSize({ maxWidth: 600 })
+      .padding({ left: 20, right: 20, top: 18, bottom: 20 })
     }
     .width('100%')
     .layoutWeight(1)
+    .align(Alignment.Top)
+    .scrollBar(BarState.Off)
   }
   @Builder
   private Header() {
     Row() {
-      Column({ space: 6 }) {
-        Text('坐直了')
-          .fontSize(30)
+      Column({ space: 7 }) {
+        Text(this.activeTab === 0 ? '坐直了' : TABS[this.activeTab].label)
+          .fontSize(28)
           .fontWeight(FontWeight.Bold)
           .fontColor(INK)
         Row({ space: 6 }) {
-          Text('')
-            .width(8)
-            .height(8)
-            .backgroundColor(this.isGuarding ? GREEN : MUTED)
-            .borderRadius(4)
-          Text(this.headerStatusText())
+          SymbolGlyph($r('sys.symbol.checkmark_shield_fill'))
             .fontSize(14)
-            .fontWeight(FontWeight.Bold)
+            .fontColor([this.headerStatusColor()])
+          Text(this.settings.useCoreVision ? this.headerStatusText() : '模拟预览 · 非真实检测')
+            .fontSize(12)
             .fontColor(this.headerStatusColor())
         }
       }
       .alignItems(HorizontalAlign.Start)
       .layoutWeight(1)
-      Row({ space: 8 }) {
-        Text(this.headerSwitchText())
-          .fontSize(13)
-          .fontWeight(FontWeight.Bold)
-          .fontColor(this.headerStatusColor())
-        Text('')
-          .width(28)
-          .height(18)
-          .backgroundColor(this.isGuarding ? GREEN : '#DDE6DF')
-          .borderRadius(9)
+      if (this.activeTab === 0) {
+        Row({ space: 8 }) {
+          Text(this.headerSwitchText())
+            .fontSize(12)
+            .fontColor(this.headerStatusColor())
+          SymbolGlyph(this.isGuarding ? $r('sys.symbol.camera_fill') : $r('sys.symbol.camera_slash_fill'))
+            .fontSize(18)
+            .fontColor([this.headerStatusColor()])
+        }
+        .padding({ left: 12, right: 10, top: 10, bottom: 10 })
+        .backgroundColor(GLASS)
+        .borderRadius(24)
+        .border({ width: 1, color: BORDER_GLASS })
+        .shadow({ radius: 14, color: SHADOW_CARD, offsetY: 5 })
       }
-      .height(42)
-      .padding({ left: 14, right: 12 })
-      .backgroundColor(GLASS)
-      .borderRadius(21)
-      .border({ width: 1, color: BORDER_GLASS })
-      .shadow({ radius: 18, color: SHADOW_CARD, offsetY: 8 })
     }
     .width('100%')
   }
   @Builder
   private GuardPage() {
-    Column({ space: 14 }) {
+    Column({ space: 12 }) {
       this.ScorePanel()
       this.MetricGrid()
       this.GuardActions()
@@ -1796,105 +1820,64 @@ struct Index {
   }
   @Builder
   private ScorePanel() {
-    Stack() {
-      Text('')
-        .width(150)
-        .height(150)
-        .backgroundColor('#DCF7EA')
-        .borderRadius(75)
-        .position({ x: 250, y: 0 })
-      Column({ space: 10 }) {
-        Row() {
-          Column({ space: 8 }) {
-            Row({ space: 8 }) {
-              Text('')
-              .width(26)
-              .height(26)
-                .backgroundColor(this.isIdleUiState() ? '#DDE6DF' : GREEN)
-                .borderRadius(9)
-              Text(this.heroTitleText())
-                .fontSize(20)
-                .fontWeight(FontWeight.Bold)
-                .fontColor(INK)
-                .maxLines(1)
-                .layoutWeight(1)
-            }
-            .width('100%')
-            Text(this.heroDetailText())
-              .fontSize(13)
-              .fontColor(MUTED)
-              .maxLines(1)
-            Text('综合评分')
-              .fontSize(14)
-              .fontWeight(FontWeight.Bold)
-              .fontColor(MUTED)
-              .margin({ top: 8 })
-            if (this.summary === '采样失败' && this.isGuarding) {
-              Text(this.sourceDetail)
-                .fontSize(12)
-                .fontColor(RED)
-                .lineHeight(18)
-                .maxLines(2)
-            }
-          }
-          .alignItems(HorizontalAlign.Start)
-          .layoutWeight(1)
-          Stack() {
-            Text('')
-              .width(98)
-              .height(98)
-              .backgroundColor('#E5F8EE')
-              .borderRadius(49)
-              .border({ width: 1, color: '#FFFFFF' })
-              .shadow({ radius: 24, color: SHADOW_GREEN, offsetY: 8 })
-            Text(this.heroScoreText())
-              .width(98)
-              .height(98)
-              .fontSize(this.isIdleUiState() ? 34 : 44)
-              .fontWeight(FontWeight.Bold)
-              .fontColor(this.heroScoreColor())
-              .textAlign(TextAlign.Center)
-              .lineHeight(98)
-          }
-          .width(104)
-          .height(104)
-        }
-        .width('100%')
+    Column({ space: 14 }) {
+      Row({ space: 12 }) {
         Column({ space: 8 }) {
-          Row() {
-            Blank()
-            Text(this.heroStatusLabel())
-              .fontSize(13)
-              .fontWeight(FontWeight.Bold)
-              .fontColor(this.isIdleUiState() ? MUTED : this.heroScoreColor())
-          }
-          .width('100%')
-          Row() {
-            if (this.heroProgressValue() > 0) {
-              Text('')
-                .height(10)
-                .width(this.heroProgressValue().toString() + '%')
-                .backgroundColor(this.heroScoreColor())
-                .borderRadius(5)
-            }
-          }
-          .width('100%')
-          .height(10)
-          .backgroundColor('#E4EAE2')
-          .borderRadius(5)
+          SymbolGlyph($r('sys.symbol.checkmark_shield_fill'))
+            .fontSize(26)
+            .fontColor([this.isIdleUiState() ? GREEN : this.heroScoreColor()])
+          Text(this.heroTitleText())
+            .fontSize(22)
+            .fontWeight(FontWeight.Bold)
+            .fontColor(INK)
+            .maxLines(2)
+          Text(this.heroDetailText())
+            .fontSize(12)
+            .fontColor(MUTED)
+            .lineHeight(18)
+            .maxLines(2)
         }
-        .width('100%')
+        .layoutWeight(1)
+        .alignItems(HorizontalAlign.Start)
+        Column({ space: 0 }) {
+          Text(this.heroScoreText())
+            .fontSize(64)
+            .fontWeight(FontWeight.Bold)
+            .fontColor(this.heroScoreColor())
+            .maxLines(1)
+            .minFontSize(44)
+            .maxFontSize(64)
+          Text('综合评分')
+            .fontSize(12)
+            .fontColor(MUTED)
+        }
+        .width(106)
       }
       .width('100%')
-      .height('100%')
-      .padding(18)
+      Row({ space: 10 }) {
+        Progress({ value: this.heroProgressValue(), total: 100, type: ProgressType.Linear })
+          .layoutWeight(1)
+          .color(this.heroScoreColor())
+          .backgroundColor('#DFEBE5')
+          .style({ strokeWidth: 6 })
+        Text(this.heroStatusLabel())
+          .fontSize(11)
+          .fontColor(this.isIdleUiState() ? MUTED : this.heroScoreColor())
+          .constraintSize({ maxWidth: 100 })
+          .maxLines(2)
+      }
+      .width('100%')
+      if (this.summary === '采样失败' && this.isGuarding) {
+        Text(this.sourceDetail).fontSize(12).fontColor(RED).maxLines(2).width('100%')
+      }
     }
     .width('100%')
-    .height(172)
-    .backgroundColor(GLASS_GREEN)
-    .borderRadius(28)
+    .padding(20)
+    .constraintSize({ minHeight: 180 })
+    .linearGradient({ angle: 120, colors: [['#FAFCFE', 0], ['#E6F5EE', 1]] })
+    .borderRadius(26)
     .border({ width: 1, color: BORDER_GLASS })
-    .shadow({ radius: 30, color: SHADOW_GREEN, offsetY: 12 })
+    .shadow({ radius: 20, color: SHADOW_GREEN, offsetY: 8 })
   }
   @Builder
   private HardReminderOverlay() {
@@ -2137,9 +2120,9 @@ struct Index {
   }
   @Builder
   private MetricGrid() {
-    Row({ space: 10 }) {
-      if (this.isIdleUiState()) {
-        this.MetricTile('坐姿', '待识别', BLUE, BLUE_SOFT, '未识别上半', '--', 1)
+    Row({ space: 8 }) {
+      if (this.isIdleUiState() || this.isStartingGuard || this.isGuarding && !this.hasCurrentReading()) {
+        this.MetricTile('坐姿', '待识别', MUTED, GLASS_SOFT, '肩颈与躯干', '--', 1)
         this.MetricTile('抬头', '待识别', BLUE, BLUE_SOFT, '未识别人脸', '--', 3)
         this.MetricTile('嘴巴', '待识别', BLUE, BLUE_SOFT, '嘴部未识别', '--', 11)
       } else if (this.isFinishedUiState()) {
@@ -2149,11 +2132,11 @@ struct Index {
         this.MetricTile('嘴巴', '完成', GREEN, GREEN_SOFT, '建议已更新', '--', 11)
       } else {
         this.MetricTile('坐姿', levelText(this.sitLevel), levelColor(this.sitLevel), levelSoftColor(this.sitLevel),
-          this.sitLabel, this.sitValue.toString() + '%', 1)
+          this.sitLabel, this.sitLevel === PostureLevel.UNKNOWN ? '--' : this.sitValue.toString() + '%', 1)
         this.MetricTile('抬头', levelText(this.chinLevel), levelColor(this.chinLevel), levelSoftColor(this.chinLevel),
-          this.chinLabel, this.chinValue.toString() + '°', 3)
+          this.chinLabel, this.chinLevel === PostureLevel.UNKNOWN ? '--' : this.chinValue.toString() + '°', 3)
         this.MetricTile('嘴巴', levelText(this.mouthLevel), levelColor(this.mouthLevel), levelSoftColor(this.mouthLevel),
-          this.mouthLabel, this.mouthValue.toString(), 11)
+          this.mouthLabel, this.mouthLevel === PostureLevel.UNKNOWN ? '--' : this.mouthValue.toString(), 11)
       }
     }
     .width('100%')
@@ -2162,69 +2145,71 @@ struct Index {
   private MetricTile(title: string, status: string, color: string, softColor: string, label: string, value: string,
     iconId: number) {
     Column({ space: 7 }) {
-      Row() {
+      Row({ space: 4 }) {
         Text(title)
-          .fontSize(15)
-          .fontWeight(FontWeight.Bold)
-          .fontColor(INK)
+          .fontSize(13)
+          .fontColor(MUTED)
         Blank()
         Text(status)
-          .width(48)
-          .height(26)
-          .fontSize(11)
+          .fontSize(10)
           .fontWeight(FontWeight.Bold)
           .fontColor(color)
-          .textAlign(TextAlign.Center)
-          .lineHeight(26)
+          .padding({ left: 6, right: 6, top: 4, bottom: 4 })
           .backgroundColor(softColor)
-          .borderRadius(13)
+          .borderRadius(8)
+          .maxLines(1)
       }
       .width('100%')
       Image(this.guideCorrectResource(iconId))
-        .width(28)
-        .height(28)
+        .width(38)
+        .height(40)
         .objectFit(ImageFit.Contain)
       Text(label)
-        .fontSize(15)
-        .fontWeight(FontWeight.Bold)
+        .fontSize(12)
         .fontColor(INK)
+        .maxLines(2)
+        .height(32)
+        .lineHeight(16)
+      Text(value)
+        .fontSize(22)
+        .minFontSize(16)
+        .maxFontSize(22)
         .maxLines(1)
-      Row() {
-        Text(value)
-          .fontSize(18)
-          .fontWeight(FontWeight.Bold)
-          .fontColor(color)
-        Blank()
-        Text('›')
-          .fontSize(18)
-          .fontWeight(FontWeight.Bold)
-          .fontColor(MUTED)
-      }
-      .width('100%')
+        .fontWeight(FontWeight.Medium)
+        .fontColor(color)
     }
-    .height(116)
+    .height(158)
     .layoutWeight(1)
     .alignItems(HorizontalAlign.Start)
     .justifyContent(FlexAlign.SpaceBetween)
-    .padding(13)
+    .padding(12)
     .backgroundColor(GLASS)
-    .borderRadius(22)
-    .border({ width: 1, color: LINE_SOFT })
-    .shadow({ radius: 18, color: SHADOW_CARD, offsetY: 8 })
+    .borderRadius(20)
+    .border({ width: 1, color: BORDER_GLASS })
+    .shadow({ radius: 14, color: SHADOW_CARD, offsetY: 5 })
   }
   @Builder
   private GuardActions() {
     Column({ space: 10 }) {
-      Button(this.guardButtonText())
+      Button() {
+        Row({ space: 10 }) {
+          SymbolGlyph(this.isGuarding ? $r('sys.symbol.stop_circle') : $r('sys.symbol.play_fill'))
+            .fontSize(22)
+            .fontColor(['#FFFFFF'])
+          Text(this.guardButtonText())
+            .fontSize(18)
+            .fontWeight(FontWeight.Bold)
+            .fontColor('#FFFFFF')
+        }
+      }
         .height(54)
         .width('100%')
-        .fontSize(19)
-        .fontWeight(FontWeight.Bold)
-        .fontColor('#FFFFFF')
         .backgroundColor(this.guardButtonColor())
-        .borderRadius(24)
-        .shadow({ radius: 20, color: (this.isGuarding || this.isStoppingGuard) ? SHADOW_CORAL : SHADOW_GREEN, offsetY: 8 })
+        .borderRadius(27)
+        .shadow({ radius: 14, color: (this.isGuarding || this.isStoppingGuard) ? SHADOW_CORAL : SHADOW_GREEN, offsetY: 6 })
         .opacity(this.actionOpacity())
+        .enabled(!this.controlsLocked())
+        .accessibilityText(this.guardButtonText())
         .onClick(() => {
           if (this.controlsLocked()) {
             return;
@@ -2237,42 +2222,12 @@ struct Index {
         })
       if (this.isFinishedUiState()) {
         this.SessionReportCard()
-      } else if (this.isIdleUiState()) {
+      } else if (this.isIdleUiState() || this.isStartingGuard || this.isGuarding && !this.hasCurrentReading() ||
+        this.isUnrecognizedUiState()) {
         this.IdleHintCard()
       } else {
         this.PostureInsightCard()
       }
-      Row({ space: 10 }) {
-        Button(this.isManualOperation ? '处理中' : '记录基线')
-          .height(48)
-          .layoutWeight(1)
-          .fontSize(15)
-          .fontWeight(FontWeight.Bold)
-          .fontColor(INK)
-          .backgroundColor(GLASS)
-          .borderRadius(22)
-          .border({ width: 1, color: BORDER_GLASS })
-          .shadow({ radius: 16, color: SHADOW_CARD, offsetY: 6 })
-          .opacity(this.actionOpacity())
-          .onClick(() => {
-            this.calibrateFromCurrent();
-          })
-        Button(this.isManualOperation ? '处理中' : '抽样一次')
-          .height(48)
-          .layoutWeight(1)
-          .fontSize(15)
-          .fontWeight(FontWeight.Bold)
-          .fontColor(INK)
-          .backgroundColor(GLASS)
-          .borderRadius(22)
-          .border({ width: 1, color: BORDER_GLASS })
-          .shadow({ radius: 16, color: SHADOW_CARD, offsetY: 6 })
-          .opacity(this.actionOpacity())
-          .onClick(() => {
-            this.sampleOnce();
-          })
-      }
-      .width('100%')
     }
     .width('100%')
   }
@@ -2352,7 +2307,7 @@ struct Index {
       .borderRadius(20)
       Column({ space: 8 }) {
         Row({ space: 8 }) {
-          Text('待机')
+          Text('建议')
             .width(44)
             .height(26)
             .fontSize(12)
@@ -2362,27 +2317,23 @@ struct Index {
             .lineHeight(26)
             .backgroundColor(GREEN_SOFT)
             .borderRadius(13)
-          Text('准备开始守护')
+          Text(this.isUnrecognizedUiState() ? '请保持上半身入镜' : '坐稳，肩膀放松')
             .fontSize(18)
             .fontWeight(FontWeight.Bold)
             .fontColor(INK)
-            .maxLines(1)
+            .maxLines(2)
+            .layoutWeight(1)
         }
-        Text('开启后会在这里显示实时识别建议；图像只在本机用于姿态判断。')
+        Text('腰背自然舒展，双脚平放地面。让人脸和双肩保持在摄像头视野内。')
           .fontSize(14)
           .fontColor(MUTED)
           .lineHeight(20)
-          .maxLines(2)
-        Text('低频抽帧 · 本机识别 · 不展示实时画面')
-          .fontSize(12)
-          .fontWeight(FontWeight.Bold)
-          .fontColor(GREEN)
-          .maxLines(1)
+          .maxLines(3)
       }
       .alignItems(HorizontalAlign.Start)
       .layoutWeight(1)
     }
-    .height(120)
+    .constraintSize({ minHeight: 124 })
     .width('100%')
     .padding(12)
     .backgroundColor(GLASS)
@@ -2392,7 +2343,7 @@ struct Index {
   }
   @Builder
   private PostureInsightCard() {
-    Row({ space: 14 }) {
+    Row({ space: 12 }) {
       this.PostureDemoFigure()
       Column({ space: 8 }) {
         Row({ space: 8 }) {
@@ -2407,10 +2358,10 @@ struct Index {
             .backgroundColor(this.postureSoftColor())
             .borderRadius(13)
           Text(this.postureInsightTitle())
-            .fontSize(18)
+            .fontSize(17)
             .fontWeight(FontWeight.Bold)
             .fontColor(INK)
-            .maxLines(1)
+            .maxLines(2)
             .layoutWeight(1)
         }
         .width('100%')
@@ -2418,7 +2369,7 @@ struct Index {
           .fontSize(14)
           .fontColor(MUTED)
           .lineHeight(20)
-          .maxLines(2)
+          .maxLines(3)
         Row({ space: 6 }) {
           Text('坐姿')
             .fontSize(12)
@@ -2444,7 +2395,7 @@ struct Index {
       .alignItems(HorizontalAlign.Start)
       .layoutWeight(1)
     }
-    .height(148)
+    .constraintSize({ minHeight: 144 })
     .width('100%')
     .padding(12)
     .backgroundColor(GLASS)
@@ -2460,13 +2411,25 @@ struct Index {
         .height('92%')
         .objectFit(ImageFit.Contain)
     }
-    .width(116)
-    .height(124)
+    .width(96)
+    .height(116)
     .backgroundColor(this.postureFigureBackground())
     .borderRadius(18)
   }
   @Builder
   private PrivacyBand() {
+    Row({ space: 6 }) {
+      SymbolGlyph($r('sys.symbol.lock_fill')).fontSize(11).fontColor([MUTED])
+      Text('本机处理 · 不保存影像 · 不上传')
+        .fontSize(11)
+        .fontColor(MUTED)
+    }
+    .width('100%')
+    .justifyContent(FlexAlign.Center)
+    .padding({ top: 4, bottom: 4 })
+  }
+  @Builder
+  private CameraDiagnostics() {
     Column({ space: 8 }) {
       Text(this.privacyBandTitle())
         .fontSize(13)
@@ -2559,6 +2522,7 @@ struct Index {
       return;
     }
     this.activeTab = index;
+    this.pageScroller.scrollTo({ xOffset: 0, yOffset: 0 });
   }
   private primaryPostureAlert(): PostureAlertType {
     if (this.reminderAction !== ReminderAction.NONE && this.reminderAlertType !== PostureAlertType.NONE) {
@@ -2632,7 +2596,8 @@ struct Index {
     if (alert === PostureAlertType.ITEM_12) {
       return '久坐提醒';
     }
-    return '坐姿端正';
+    return this.sitLevel === PostureLevel.UNKNOWN || this.chinLevel === PostureLevel.UNKNOWN ||
+      this.mouthLevel === PostureLevel.UNKNOWN ? '部分姿态可见' : '坐姿端正';
   }
   private postureInsightAdvice(): string {
     const alert = this.primaryPostureAlert();
@@ -2719,8 +2684,8 @@ struct Index {
   private TodaySummary() {
     Column({ space: 12 }) {
       Row() {
-        Text('今日')
-          .fontSize(20)
+        Text('今日概览')
+          .fontSize(17)
           .fontWeight(FontWeight.Bold)
           .fontColor(INK)
         Blank()
@@ -2730,7 +2695,8 @@ struct Index {
       }
       .width('100%')
       Row({ space: 10 }) {
-        StatTile({ label: '均分', value: this.todayStats().averageScore.toString(), color: scoreColor(this.todayStats().averageScore) })
+        StatTile({ label: '均分', value: this.todayStats().sampleCount > 0 ? this.todayStats().averageScore.toString() : '--',
+          color: this.todayStats().sampleCount > 0 ? scoreColor(this.todayStats().averageScore) : MUTED })
         StatTile({ label: '端正', value: this.todayStats().uprightMinutes.toString() + '分', color: GREEN })
         StatTile({ label: '提醒', value: this.todayStats().remindCount.toString(), color: RED })
       }
@@ -2747,9 +2713,7 @@ struct Index {
         .lineHeight(20)
         .width('100%')
         .padding({ left: 12, right: 12, top: 10, bottom: 10 })
-        .backgroundColor(GLASS_SOFT)
-        .borderRadius(16)
-        .border({ width: 1, color: LINE_SOFT })
+        .border({ width: { top: 1 }, color: LINE_SOFT })
     }
     .width('100%')
     .padding(16)
@@ -2762,8 +2726,8 @@ struct Index {
   private AlertBreakdownPanel() {
     Column({ space: 12 }) {
       Row() {
-        Text('今日问题')
-          .fontSize(20)
+        Text('问题分布')
+          .fontSize(17)
           .fontWeight(FontWeight.Bold)
           .fontColor(INK)
         Blank()
@@ -2773,15 +2737,13 @@ struct Index {
       }
       .width('100%')
       if (this.alertBreakdown().length === 0) {
-        Text('暂无姿势提醒')
+        Text(this.todayStats().sampleCount > 0 ? '今天没有姿势提醒' : '暂无检测数据')
           .height(56)
           .fontSize(15)
           .fontColor(MUTED)
           .textAlign(TextAlign.Center)
           .width('100%')
           .lineHeight(56)
-          .backgroundColor(GLASS_SOFT)
-          .borderRadius(16)
       } else {
         ForEach(this.alertBreakdown().slice(0, 5), (item: AlertBreakdownItem) => {
           Column({ space: 6 }) {
@@ -2810,9 +2772,6 @@ struct Index {
           }
           .width('100%')
           .padding({ left: 10, right: 10, top: 10, bottom: 10 })
-          .backgroundColor(GLASS_SOFT)
-          .borderRadius(16)
-          .border({ width: 1, color: LINE_SOFT })
         }, (item: AlertBreakdownItem) => item.type)
       }
     }
@@ -2826,8 +2785,8 @@ struct Index {
   @Builder
   private HourChart() {
     Column({ space: 12 }) {
-      Text('最近时段')
-        .fontSize(20)
+      Text('最近时段评分')
+        .fontSize(17)
         .fontWeight(FontWeight.Bold)
         .fontColor(INK)
         .width('100%')
@@ -2838,13 +2797,15 @@ struct Index {
               Text('')
                 .width('100%')
                 .height(112)
-                .backgroundColor('#E7EFE8')
-                .borderRadius(14)
-              Text('')
-                .width('100%')
-                .height(Math.max(8, bucket.score))
-                .backgroundColor(scoreColor(bucket.score))
-                .borderRadius(14)
+                .backgroundColor(GLASS_SOFT)
+                .borderRadius(8)
+              if (bucket.score > 0) {
+                Text('')
+                  .width('100%')
+                  .height(bucket.score)
+                  .backgroundColor(scoreColor(bucket.score))
+                  .borderRadius(8)
+              }
             }
             .height(112)
             .width('100%')
@@ -2852,9 +2813,9 @@ struct Index {
               .fontSize(10)
               .fontColor(MUTED)
               .maxLines(1)
-            Text(bucket.badRate.toString() + '%')
+            Text(bucket.score > 0 ? bucket.score.toString() : '--')
               .fontSize(10)
-              .fontColor(bucket.badRate > 25 ? RED : MUTED)
+              .fontColor(bucket.score > 0 ? scoreColor(bucket.score) : MUTED)
           }
           .layoutWeight(1)
         }, (bucket: HourBucket) => bucket.label)
@@ -2872,7 +2833,7 @@ struct Index {
   private RecentList() {
     Column({ space: 10 }) {
       Text('最近记录')
-        .fontSize(20)
+        .fontSize(17)
         .fontWeight(FontWeight.Bold)
         .fontColor(INK)
         .width('100%')
@@ -2884,8 +2845,6 @@ struct Index {
           .textAlign(TextAlign.Center)
           .width('100%')
           .lineHeight(56)
-          .backgroundColor(GLASS_SOFT)
-          .borderRadius(16)
       } else {
         ForEach(this.recentRecords(), (record: SessionRecord) => {
           Row() {
@@ -2910,9 +2869,7 @@ struct Index {
           .height(44)
           .width('100%')
           .padding({ left: 10, right: 10 })
-          .backgroundColor(GLASS_SOFT)
-          .borderRadius(16)
-          .border({ width: 1, color: LINE_SOFT })
+          .border({ width: { bottom: 1 }, color: LINE_SOFT })
         }, (record: SessionRecord) => record.timestamp.toString())
       }
     }
@@ -3408,8 +3365,8 @@ struct Index {
   private GuidePage() {
     Column({ space: 12 }) {
       Row() {
-        Text('坐姿指南')
-          .fontSize(20)
+        Text('日常姿态练习')
+          .fontSize(17)
           .fontWeight(FontWeight.Bold)
           .fontColor(INK)
         Blank()
@@ -3427,7 +3384,7 @@ struct Index {
   @Builder
   private GuideCard(item: PostureGuideItem) {
     Column({ space: 12 }) {
-      Row() {
+      Row({ space: 10 }) {
         Text(item.id.toString())
           .width(30)
           .height(30)
@@ -3513,16 +3470,10 @@ struct Index {
   private CalibrationPanel() {
     Column({ space: 12 }) {
       Text('校准')
-        .fontSize(20)
+        .fontSize(17)
         .fontWeight(FontWeight.Bold)
         .fontColor(INK)
         .width('100%')
-      Row({ space: 8 }) {
-        BaselineTile({ label: '颈角', value: this.formatDegree(this.settings.profile.neutralNeckAngle) })
-        BaselineTile({ label: '俯仰', value: this.formatDegree(this.settings.profile.neutralPitch) })
-        BaselineTile({ label: '肩宽', value: this.formatBaselineWidth(this.settings.profile.neutralShoulderWidth) })
-      }
-      .width('100%')
       Text(this.formatCalibrationStatus(this.settings.profile.calibratedAt))
         .fontSize(13)
         .fontColor(MUTED)
@@ -3573,7 +3524,7 @@ struct Index {
           .borderRadius(16)
       }
       Row({ space: 10 }) {
-        Button(this.isManualOperation ? '处理中' : '记录基线')
+        Button(this.isManualOperation ? '校准中' : '校准坐姿')
           .height(48)
           .layoutWeight(1)
           .fontSize(15)
@@ -3582,6 +3533,7 @@ struct Index {
           .backgroundColor(GREEN)
           .borderRadius(20)
           .opacity(this.actionOpacity())
+          .enabled(!this.controlsLocked())
           .onClick(() => {
             this.calibrateFromCurrent();
           })
@@ -3595,6 +3547,7 @@ struct Index {
           .borderRadius(20)
           .border({ width: 1, color: LINE_SOFT })
           .opacity(this.actionOpacity())
+          .enabled(!this.controlsLocked())
           .onClick(() => {
             this.requestResetCalibration();
           })
@@ -3611,27 +3564,30 @@ struct Index {
   @Builder
   private SamplingPanel() {
     Column({ space: 12 }) {
-      Text('抽帧与灵敏度')
-        .fontSize(20)
+      Text('识别设置')
+        .fontSize(17)
         .fontWeight(FontWeight.Bold)
         .fontColor(INK)
         .width('100%')
-      Row({ space: 8 }) {
+      Text('灵敏度').fontSize(13).fontColor(MUTED).width('100%')
+      Row({ space: 4 }) {
         this.SegmentButton('标准', STANDARD_SENSITIVITY)
         this.SegmentButton('灵敏', SENSITIVE_SENSITIVITY)
       }
       .width('100%')
-      Row({ space: 8 }) {
+      .padding(4)
+      .backgroundColor(GLASS_SOFT)
+      .borderRadius(14)
+      Text('检测间隔').fontSize(13).fontColor(MUTED).width('100%')
+      Row({ space: 4 }) {
         this.IntervalButton(2000)
         this.IntervalButton(3000)
         this.IntervalButton(5000)
       }
       .width('100%')
-      Text('当前：' + this.sensitivityLabel(this.settings.profile.sensitivity) + ' · ' +
-        this.intervalLabel(this.settings.profile.sampleIntervalMs))
-        .fontSize(13)
-        .fontColor(MUTED)
-        .width('100%')
+      .padding(4)
+      .backgroundColor(GLASS_SOFT)
+      .borderRadius(14)
     }
     .width('100%')
     .padding(16)
@@ -3642,39 +3598,35 @@ struct Index {
   }
   @Builder
   private SegmentButton(label: string, value: number) {
-    Row() {
+    Button({ type: ButtonType.Normal }) {
       Text(label)
         .fontSize(14)
-        .fontWeight(FontWeight.Bold)
-        .fontColor(this.isSensitivitySelected(value) ? '#FFFFFF' : INK)
-      Blank()
-      Text(this.isSensitivitySelected(value) ? '已选' : '选择')
-        .fontSize(12)
-        .fontColor(this.isSensitivitySelected(value) ? '#FFFFFF' : MUTED)
+        .fontWeight(this.isSensitivitySelected(value) ? FontWeight.Bold : FontWeight.Regular)
+        .fontColor(this.isSensitivitySelected(value) ? GREEN_DEEP : MUTED)
     }
-      .height(48)
+      .height(38)
       .layoutWeight(1)
-      .padding({ left: 14, right: 14 })
-      .backgroundColor(this.isSensitivitySelected(value) ? GREEN : GLASS_SOFT)
-      .borderRadius(20)
-      .border({ width: 1, color: this.isSensitivitySelected(value) ? GREEN : LINE_SOFT })
+      .backgroundColor(this.isSensitivitySelected(value) ? '#FFFFFF' : '#00000000')
+      .borderRadius(10)
       .opacity(this.actionOpacity())
+      .enabled(!this.controlsLocked())
+      .accessibilityText(label + (this.isSensitivitySelected(value) ? '，已选择' : ''))
       .onClick(() => {
         this.setSensitivity(value);
       })
   }
   @Builder
   private IntervalButton(value: number) {
-    Button(this.intervalLabel(value))
-      .height(42)
+    Button(this.intervalLabel(value), { type: ButtonType.Normal })
+      .height(38)
       .layoutWeight(1)
       .fontSize(14)
       .fontWeight(FontWeight.Bold)
-      .fontColor(this.settings.profile.sampleIntervalMs === value ? '#FFFFFF' : INK)
-      .backgroundColor(this.settings.profile.sampleIntervalMs === value ? GREEN : GLASS_SOFT)
-      .borderRadius(20)
-      .border({ width: 1, color: this.settings.profile.sampleIntervalMs === value ? GREEN : LINE_SOFT })
+      .fontColor(this.settings.profile.sampleIntervalMs === value ? GREEN_DEEP : MUTED)
+      .backgroundColor(this.settings.profile.sampleIntervalMs === value ? '#FFFFFF' : '#00000000')
+      .borderRadius(10)
       .opacity(this.actionOpacity())
+      .enabled(!this.controlsLocked())
       .onClick(() => {
         this.setIntervalMs(value);
       })
@@ -3683,14 +3635,20 @@ struct Index {
   private PrivacyPanel() {
     Column({ space: 10 }) {
       Text('隐私与提醒')
-        .fontSize(20)
+        .fontSize(17)
         .fontWeight(FontWeight.Bold)
         .fontColor(INK)
         .width('100%')
-      this.CoreVisionSwitchRow()
-      this.PrivacySwitchRow()
       this.SoundSwitchRow()
       this.VibrationSwitchRow()
+      Divider().color(LINE_SOFT)
+      Row({ space: 10 }) {
+        SymbolGlyph($r('sys.symbol.lock_shield_fill')).fontSize(20).fontColor([GREEN])
+        Column({ space: 4 }) {
+          Text('影像只在本机处理').fontSize(14).fontColor(INK)
+          Text('不保存照片或录像，不上传云端').fontSize(12).fontColor(MUTED)
+        }.alignItems(HorizontalAlign.Start).layoutWeight(1)
+      }.width('100%').padding({ top: 6, bottom: 6 })
     }
     .width('100%')
     .padding(16)
@@ -3707,15 +3665,12 @@ struct Index {
         .fontWeight(FontWeight.Bold)
         .fontColor(INK)
       Blank()
-      Button(this.settings.useCoreVision ? '开' : '关')
-        .width(48)
-        .height(30)
-        .fontSize(13)
-        .fontWeight(FontWeight.Bold)
-        .fontColor(this.settings.useCoreVision ? '#FFFFFF' : MUTED)
-        .backgroundColor(this.settings.useCoreVision ? GREEN : '#E6EBE4')
-        .borderRadius(15)
-        .opacity(this.actionOpacity())
+      Button(this.settings.useCoreVision ? '切换为模拟' : '切换为相机')
+        .fontSize(12)
+        .height(34)
+        .fontColor(GREEN_DEEP)
+        .backgroundColor(GREEN_SOFT)
+        .enabled(!this.controlsLocked())
         .onClick(() => {
           this.requestToggleCoreVision();
         })
@@ -3730,22 +3685,19 @@ struct Index {
   @Builder
   private PrivacySwitchRow() {
     Row() {
-      Text('本机隐私模式')
+      Text('显示诊断详情')
         .fontSize(16)
         .fontWeight(FontWeight.Bold)
         .fontColor(INK)
       Blank()
-      Button(this.settings.privacyMode ? '开' : '关')
-        .width(48)
-        .height(30)
-        .fontSize(13)
-        .fontWeight(FontWeight.Bold)
-        .fontColor(this.settings.privacyMode ? '#FFFFFF' : MUTED)
-        .backgroundColor(this.settings.privacyMode ? GREEN : '#E6EBE4')
-        .borderRadius(15)
-        .opacity(this.actionOpacity())
-        .onClick(() => {
-          this.togglePrivacy();
+      Toggle({ type: ToggleType.Switch, isOn: !this.settings.privacyMode })
+        .selectedColor(GREEN)
+        .enabled(!this.controlsLocked())
+        .accessibilityText('显示诊断详情')
+        .onChange((value: boolean) => {
+          if (value === this.settings.privacyMode) {
+            this.togglePrivacy();
+          }
         })
     }
     .height(48)
@@ -3763,17 +3715,14 @@ struct Index {
         .fontWeight(FontWeight.Bold)
         .fontColor(INK)
       Blank()
-      Button(this.settings.gentleSound ? '开' : '关')
-        .width(48)
-        .height(30)
-        .fontSize(13)
-        .fontWeight(FontWeight.Bold)
-        .fontColor(this.settings.gentleSound ? '#FFFFFF' : MUTED)
-        .backgroundColor(this.settings.gentleSound ? GREEN : '#E6EBE4')
-        .borderRadius(15)
-        .opacity(this.actionOpacity())
-        .onClick(() => {
-          this.toggleSound();
+      Toggle({ type: ToggleType.Switch, isOn: this.settings.gentleSound })
+        .selectedColor(GREEN)
+        .enabled(!this.controlsLocked())
+        .accessibilityText('轻提示音')
+        .onChange((value: boolean) => {
+          if (value !== this.settings.gentleSound) {
+            this.toggleSound();
+          }
         })
     }
     .height(48)
@@ -3791,17 +3740,14 @@ struct Index {
         .fontWeight(FontWeight.Bold)
         .fontColor(INK)
       Blank()
-      Button(this.settings.vibration ? '开' : '关')
-        .width(48)
-        .height(30)
-        .fontSize(13)
-        .fontWeight(FontWeight.Bold)
-        .fontColor(this.settings.vibration ? '#FFFFFF' : MUTED)
-        .backgroundColor(this.settings.vibration ? GREEN : '#E6EBE4')
-        .borderRadius(15)
-        .opacity(this.actionOpacity())
-        .onClick(() => {
-          this.toggleVibration();
+      Toggle({ type: ToggleType.Switch, isOn: this.settings.vibration })
+        .selectedColor(GREEN)
+        .enabled(!this.controlsLocked())
+        .accessibilityText('短振动')
+        .onChange((value: boolean) => {
+          if (value !== this.settings.vibration) {
+            this.toggleVibration();
+          }
         })
     }
     .height(48)
@@ -3814,68 +3760,88 @@ struct Index {
   @Builder
   private DeveloperDebugPanel() {
     Column({ space: 10 }) {
-      Row() {
-        Column({ space: 4 }) {
-          Text('开发者调试')
-            .fontSize(18)
-            .fontWeight(FontWeight.Bold)
-            .fontColor(INK)
-          Text('检测日志、精度校准和参数视图')
-            .fontSize(13)
-            .fontColor(MUTED)
-            .maxLines(1)
+      Button({ type: ButtonType.Normal }) {
+        Row({ space: 12 }) {
+          Column({ space: 4 }) {
+            Text('开发者工具')
+              .fontSize(16)
+              .fontWeight(FontWeight.Bold)
+              .fontColor(INK)
+            Text('检测日志与测试选项')
+              .fontSize(13)
+              .fontColor(MUTED)
+              .maxLines(1)
+          }
+          .alignItems(HorizontalAlign.Start)
+          .layoutWeight(1)
+          SymbolGlyph(this.showDebugPanel ? $r('sys.symbol.chevron_up') : $r('sys.symbol.chevron_down'))
+            .fontSize(16).fontColor([MUTED])
         }
-        .layoutWeight(1)
-        Button(this.showDebugPanel ? '收起' : '展开')
-          .width(76)
-          .height(34)
-          .fontSize(13)
-          .fontWeight(FontWeight.Bold)
-          .fontColor(this.showDebugPanel ? MUTED : GREEN_DEEP)
-          .backgroundColor(this.showDebugPanel ? GLASS_SOFT : GREEN_SOFT)
-          .borderRadius(17)
-          .border({ width: 1, color: LINE_SOFT })
-          .onClick(() => {
-            this.showDebugPanel = !this.showDebugPanel;
-          })
+        .width('100%')
       }
       .width('100%')
+      .constraintSize({ minHeight: 52 })
+      .padding({ top: 6, bottom: 6 })
+      .backgroundColor('#00000000')
+      .accessibilityText(this.showDebugPanel ? '收起开发者工具' : '展开开发者工具')
+      .onClick(() => {
+        this.showDebugPanel = !this.showDebugPanel;
+      })
       if (this.showDebugPanel) {
+        this.CoreVisionSwitchRow()
+        this.PrivacySwitchRow()
+        Button('抽样一次')
+          .height(44).width('100%').fontColor(GREEN_DEEP).backgroundColor(GREEN_SOFT)
+          .enabled(!this.controlsLocked()).onClick(() => { this.sampleOnce(); })
+        Row({ space: 8 }) {
+          BaselineTile({ label: '颈角', value: this.formatDegree(this.settings.profile.neutralNeckAngle) })
+          BaselineTile({ label: '俯仰', value: this.formatDegree(this.settings.profile.neutralPitch) })
+          BaselineTile({ label: '肩宽', value: this.formatBaselineWidth(this.settings.profile.neutralShoulderWidth) })
+        }.width('100%')
+        this.CameraDiagnostics()
         this.DebugPage()
       }
     }
     .width('100%')
     .padding(16)
-    .backgroundColor(GLASS)
-    .borderRadius(24)
-    .border({ width: 1, color: BORDER_GLASS })
-    .shadow({ radius: 18, color: SHADOW_CARD, offsetY: 8 })
+    .border({ width: { top: 1 }, color: LINE_SOFT })
   }
   @Builder
   private TabBar() {
-    Row({ space: 6 }) {
+    Row({ space: 4 }) {
       ForEach(TABS, (item: TabItem) => {
-        Button(item.label)
-          .height(56)
+        Button({ type: ButtonType.Normal }) {
+          Column({ space: 5 }) {
+            SymbolGlyph(item.icon)
+              .fontSize(23)
+              .fontColor([this.activeTab === item.index ? GREEN : '#939DA9'])
+            Text(item.label)
+              .fontSize(11)
+              .fontWeight(this.activeTab === item.index ? FontWeight.Bold : FontWeight.Regular)
+              .fontColor(this.activeTab === item.index ? GREEN_DEEP : MUTED)
+          }
+        }
+          .height(54)
           .layoutWeight(1)
-          .fontSize(14)
-          .fontWeight(FontWeight.Bold)
-          .fontColor(this.activeTab === item.index ? GREEN_DEEP : MUTED)
-          .backgroundColor(this.activeTab === item.index ? GLASS_GREEN : '#00000000')
-          .borderRadius(22)
+          .backgroundColor(this.activeTab === item.index ? '#DCEFE5' : '#00000000')
+          .borderRadius(24)
           .opacity(this.actionOpacity())
+          .enabled(!this.controlsLocked())
+          .accessibilityText(item.label + (this.activeTab === item.index ? '，已选择' : ''))
           .onClick(() => {
             this.switchTab(item.index);
           })
       }, (item: TabItem) => item.label)
     }
-    .width('100%')
-    .height(78)
-    .padding({ left: 12, right: 12, top: 10, bottom: 10 })
-    .margin({ left: 18, right: 18, bottom: 18 })
+    .width('90%')
+    .constraintSize({ maxWidth: 560 })
+    .height(70)
+    .padding(8)
+    .margin({ bottom: 12, top: 4 })
     .backgroundColor(GLASS)
-    .borderRadius(30)
+    .borderRadius(35)
     .border({ width: 1, color: BORDER_GLASS })
-    .shadow({ radius: 30, color: SHADOW_BLUE, offsetY: 12 })
+    .shadow({ radius: 20, color: SHADOW_BLUE, offsetY: 6 })
+    .attributeModifier(this.immersiveSurface)
   }
 }
