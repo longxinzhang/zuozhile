@@ -4,8 +4,8 @@ import { GLASS, GLASS_SOFT, INK, MUTED } from '../theme/ZuozhiTheme';
 export struct PostureMetricTile {
   @Prop title: string = '';
   @Prop status: string = '';
-  @Prop color: string = MUTED;
-  @Prop softColor: string = GLASS_SOFT;
+  @Prop color: ResourceColor = MUTED;
+  @Prop softColor: ResourceColor = GLASS_SOFT;
   @Prop label: string = '';
   @Prop value: string = '--';
   @Prop icon: Resource = $rawfile('assets/posture/01_posture_straighten_correct.png');

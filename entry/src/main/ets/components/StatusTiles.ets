@@ -4,7 +4,7 @@ import { GLASS, GLASS_SOFT, INK, LINE_SOFT, MUTED } from '../theme/ZuozhiTheme';
 export struct StatTile {
   @Prop label: string = '';
   @Prop value: string = '';
-  @Prop color: string = INK;
+  @Prop color: ResourceColor = INK;
 
   build() {
     Column({ space: 8 }) {
@@ -31,7 +31,7 @@ export struct StatTile {
 export struct SmallCounter {
   @Prop label: string = '';
   @Prop value: number = 0;
-  @Prop color: string = INK;
+  @Prop color: ResourceColor = INK;
 
   build() {
     Row() {

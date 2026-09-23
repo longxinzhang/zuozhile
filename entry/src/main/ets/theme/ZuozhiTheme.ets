@@ -1,34 +1,36 @@
 import { PostureLevel, ReminderAction } from '../models/PostureTypes';
 
-export const SURFACE = '#FFFFFF';
-export const SOFT = '#F3F5F8';
-export const INK = '#1D2329';
-export const MUTED = '#626D78';
-export const LINE = '#E1E5EB';
-export const GREEN = '#138654';
-export const GREEN_SOFT = '#E8F6EE';
-export const YELLOW = '#B46F00';
-export const YELLOW_SOFT = '#FFF3D7';
-export const RED = '#C23B32';
-export const RED_SOFT = '#FFE9E6';
-export const BLUE = '#2457A6';
-export const BLUE_SOFT = '#EAF1FF';
-export const APP_BG = '#F4F5F7';
-export const APP_BG_MIST = '#EDF2F6';
-export const GLASS = '#FFFFFF';
-export const GLASS_SOFT = '#E9EDF1';
-export const GLASS_GREEN = '#EFF9F3';
-export const GLASS_BLUE = '#EFF6FF';
-export const BORDER_GLASS = '#FFFFFF';
-export const LINE_SOFT = '#E6EAF0';
-export const GREEN_DEEP = '#0F6B3F';
-export const AMBER_SOFT = '#FFF1CF';
-export const CORAL = '#EB6155';
-export const CORAL_SOFT = '#FFE7E2';
-export const SHADOW_CARD = '#092A4057';
-export const SHADOW_GREEN = '#1416834F';
-export const SHADOW_BLUE = '#183C608C';
-export const SHADOW_CORAL = '#36D9463E';
+export const SURFACE: ResourceColor = $r('app.color.surface');
+export const SOFT: ResourceColor = $r('app.color.soft');
+export const INK: ResourceColor = $r('app.color.ink');
+export const MUTED: ResourceColor = $r('app.color.muted');
+export const LINE: ResourceColor = $r('app.color.line');
+export const GREEN: ResourceColor = $r('app.color.green');
+export const GREEN_SOFT: ResourceColor = $r('app.color.green_soft');
+export const YELLOW: ResourceColor = $r('app.color.yellow');
+export const YELLOW_SOFT: ResourceColor = $r('app.color.yellow_soft');
+export const RED: ResourceColor = $r('app.color.red');
+export const RED_SOFT: ResourceColor = $r('app.color.red_soft');
+export const BLUE: ResourceColor = $r('app.color.blue');
+export const BLUE_SOFT: ResourceColor = $r('app.color.blue_soft');
+export const APP_BG: ResourceColor = $r('app.color.app_bg');
+export const APP_BG_MIST: ResourceColor = $r('app.color.app_bg_mist');
+export const GLASS: ResourceColor = $r('app.color.glass');
+export const GLASS_SOFT: ResourceColor = $r('app.color.glass_soft');
+export const GLASS_GREEN: ResourceColor = $r('app.color.glass_green');
+export const GLASS_BLUE: ResourceColor = $r('app.color.glass_blue');
+export const BORDER_GLASS: ResourceColor = $r('app.color.border_glass');
+export const LINE_SOFT: ResourceColor = $r('app.color.line_soft');
+export const GREEN_DEEP: ResourceColor = $r('app.color.green_deep');
+export const AMBER_SOFT: ResourceColor = $r('app.color.amber_soft');
+export const CORAL: ResourceColor = $r('app.color.coral');
+export const CORAL_SOFT: ResourceColor = $r('app.color.coral_soft');
+export const SHADOW_CARD: ResourceColor = $r('app.color.shadow_card');
+export const SHADOW_GREEN: ResourceColor = $r('app.color.shadow_green');
+export const SHADOW_BLUE: ResourceColor = $r('app.color.shadow_blue');
+export const SHADOW_CORAL: ResourceColor = $r('app.color.shadow_coral');
+export const ACTION_GREEN: ResourceColor = $r('app.color.action_green');
+export const ACTION_RED: ResourceColor = $r('app.color.action_red');
 
 export function levelText(level: PostureLevel): string {
   if (level === PostureLevel.GOOD) {
@@ -43,7 +45,7 @@ export function levelText(level: PostureLevel): string {
   return '待识别';
 }
 
-export function levelColor(level: PostureLevel): string {
+export function levelColor(level: PostureLevel): ResourceColor {
   if (level === PostureLevel.GOOD) {
     return GREEN;
   }
@@ -53,10 +55,10 @@ export function levelColor(level: PostureLevel): string {
   if (level === PostureLevel.BAD) {
     return RED;
   }
-  return BLUE;
+  return MUTED;
 }
 
-export function levelSoftColor(level: PostureLevel): string {
+export function levelSoftColor(level: PostureLevel): ResourceColor {
   if (level === PostureLevel.GOOD) {
     return GREEN_SOFT;
   }
@@ -66,10 +68,10 @@ export function levelSoftColor(level: PostureLevel): string {
   if (level === PostureLevel.BAD) {
     return RED_SOFT;
   }
-  return BLUE_SOFT;
+  return GLASS_SOFT;
 }
 
-export function reminderColor(action: ReminderAction): string {
+export function reminderColor(action: ReminderAction): ResourceColor {
   if (action === ReminderAction.HARD) {
     return RED;
   }
@@ -79,7 +81,7 @@ export function reminderColor(action: ReminderAction): string {
   return GREEN;
 }
 
-export function scoreColor(score: number): string {
+export function scoreColor(score: number): ResourceColor {
   if (score >= 85) {
     return GREEN;
   }

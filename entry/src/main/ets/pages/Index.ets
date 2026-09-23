@@ -24,6 +24,8 @@ import {
   createDefaultSettings
 } from '../models/PostureTypes';
 import { PostureSessionStore } from '../services/PostureSessionStore';
+import { AppearanceStore } from '../services/AppearanceStore';
+import { normalizeImmersiveLevel } from '../theme/AppearanceOptions';
 import { BaselineTile, SmallCounter, StatTile } from '../components/StatusTiles';
 import { PostureMetricTile } from '../components/PostureMetricTile';
 import { MockPostureSource } from '../services/MockPostureSource';
@@ -35,8 +37,11 @@ import { PostureSource } from '../services/PostureSource';
 import { CameraProbeResult, CameraProbeService } from '../services/CameraProbeService';
 import { supportsFaceTracking } from '../services/ARFaceCapability';
 import { ARPostureSource } from '../services/ARPostureSource';
-import { HarmonyTabBar, ImmersiveSurface, navigationBottomInset, navigationTitleOptions } from '../theme/ImmersiveSurface';
+import { HarmonyTabBar, ImmersiveSurface, ContentLightSurface, navigationBottomInset, navigationTitleOptions,
+  supportsImmersiveAppearance } from '../theme/ImmersiveSurface';
 import {
+  ACTION_GREEN,
+  ACTION_RED,
   BLUE,
   APP_BG,
   BORDER_GLASS,
@@ -192,6 +197,11 @@ struct Index {
   @StorageProp('floatBusy') private floatBusy: boolean = false;
   @StorageProp('floatCapability') private floatCapability: string = '';
   @State private showSettingsTip: boolean = false;
+  @StorageLink('immersiveLevel') private immersiveLevel: number = 3;
+  @StorageProp('appearanceReady') private appearanceReady: boolean = false;
+  @StorageLink('appearanceError') private appearanceError: string = '';
+  private appearanceSaveId: number = 0;
+  private immersiveSupported: boolean = supportsImmersiveAppearance();
   @State private isCalibrationProgressHealthy: boolean = true;
   @State private calibrationProgressPercent: number = -1;
   @State private lastSampleText: string = '尚未采样';
@@ -1183,7 +1193,7 @@ struct Index {
     }
     return this.cameraPreviewSurfaceId.length > 0 ? '预览 surface 已就绪' : '预览 surface 待创建';
   }
-  private previewSurfaceDisplayColor(): string {
+  private previewSurfaceDisplayColor(): ResourceColor {
     if (!this.settings.useCoreVision || this.cameraPreviewSurfaceId.length > 0) {
       return GREEN;
     }
@@ -1195,7 +1205,7 @@ struct Index {
     }
     return '本地数据已就绪';
   }
-  private storageDisplayColor(): string {
+  private storageDisplayColor(): ResourceColor {
     return this.isStorageHealthy ? GREEN : RED;
   }
   private sourceDisplayText(): string {
@@ -1225,10 +1235,10 @@ struct Index {
     }
     this.calibrationProgressPercent = Math.max(0, Math.min(100, Math.round(percent)));
   }
-  private calibrationProgressColor(): string {
+  private calibrationProgressColor(): ResourceColor {
     return this.isCalibrationProgressHealthy ? GREEN : RED;
   }
-  private calibrationProgressSoftColor(): string {
+  private calibrationProgressSoftColor(): ResourceColor {
     return this.isCalibrationProgressHealthy ? GREEN_SOFT : RED_SOFT;
   }
   private calibrationProgressPercentText(): string {
@@ -1408,7 +1418,7 @@ struct Index {
   private alertBreakdown(): AlertBreakdownItem[] {
     return buildAlertBreakdown(this.records);
   }
-  private alertBreakdownColor(type: PostureAlertType): string {
+  private alertBreakdownColor(type: PostureAlertType): ResourceColor {
     if (type === PostureAlertType.ITEM_02 || type === PostureAlertType.ITEM_01 ||
       type === PostureAlertType.ITEM_07) {
       return RED;
@@ -1444,7 +1454,7 @@ struct Index {
     }
     return '无问题';
   }
-  private recentRecordColor(record: SessionRecord): string {
+  private recentRecordColor(record: SessionRecord): ResourceColor {
     const type = record.alertType ? record.alertType : PostureAlertType.NONE;
     if (record.action !== ReminderAction.NONE) {
       return reminderColor(record.action);
@@ -1499,7 +1509,7 @@ struct Index {
     }
     return '本帧未达到提醒阈值，记录为普通采样。';
   }
-  private debugRecordTone(record: SessionRecord): string {
+  private debugRecordTone(record: SessionRecord): ResourceColor {
     const type = record.alertType ? record.alertType : PostureAlertType.NONE;
     if (type !== PostureAlertType.NONE) {
       return this.alertBreakdownColor(type);
@@ -1705,7 +1715,7 @@ struct Index {
     }
     return '未开启';
   }
-  private headerStatusColor(): string {
+  private headerStatusColor(): ResourceColor {
     if (this.isDetectionErrorUiState()) {
       return RED;
     }
@@ -1767,13 +1777,13 @@ struct Index {
     }
     return this.score.toString();
   }
-  private heroScoreColor(): string {
+  private heroScoreColor(): ResourceColor {
     if (this.isDetectionErrorUiState()) {
       return RED;
     }
     if (this.isIdleUiState() || this.isStartingGuard || this.isGuarding && !this.hasCurrentReading() ||
       this.isUnrecognizedUiState()) {
-      return '#A9B1AD';
+      return $r('app.color.inactive_score');
     }
     if (this.isFinishedUiState() && this.sessionReportScore > 0) {
       return scoreColor(this.sessionReportScore);
@@ -1842,11 +1852,11 @@ struct Index {
             }, (item: TabItem) => item.label)
           }
           .width('100%').height('100%').barHeight(60).scrollable(false).animationDuration(220)
-          .attributeModifier(new HarmonyTabBar())
+          .attributeModifier(new HarmonyTabBar(this.immersiveLevel))
           .onContentWillChange(() => !this.controlsLocked())
           .onChange((index: number) => { this.switchTab(index); })
         }.width('100%').height('100%').mode(NavigationMode.Stack)
-          .title({ builder: this.Header(), height: 72 }, navigationTitleOptions())
+          .title({ builder: this.Header(), height: 72 }, navigationTitleOptions(this.immersiveLevel))
           .hideBackButton(true).hideToolBar(true).backgroundColor(APP_BG)
         if (this.showHardReminder) {
           this.HardReminderOverlay()
@@ -1941,7 +1951,7 @@ struct Index {
         Button({ type: ButtonType.Circle }) {
           SymbolGlyph($r('sys.symbol.gearshape_fill')).fontSize(19).fontColor([INK])
         }.width(40).height(40).backgroundColor(GLASS)
-          .attributeModifier(new ImmersiveSurface())
+          .attributeModifier(new ImmersiveSurface($r('app.color.material_tint'), this.immersiveLevel))
           .accessibilityText('打开设置')
           .bindPopup(this.showSettingsTip, { message: '设置' })
           .onHover((hovered: boolean) => { this.showSettingsTip = hovered; })
@@ -1983,7 +1993,7 @@ struct Index {
       }.layoutWeight(1).alignItems(HorizontalAlign.Start)
       Stack() {
         Progress({ value: this.heroProgressValue(), total: 100, type: ProgressType.Ring })
-          .width(108).height(108).color(this.heroScoreColor()).backgroundColor('#DCE9E4')
+          .width(108).height(108).color(this.heroScoreColor()).backgroundColor($r('app.color.progress_track'))
           .style({ strokeWidth: 5 })
         Column({ space: 0 }) {
           Text(this.heroScoreText()).fontSize(44).fontWeight(FontWeight.Bold).fontColor(this.heroScoreColor())
@@ -1993,7 +2003,8 @@ struct Index {
       }.width(108).height(108)
     }
     .width('100%').padding(20).constraintSize({ minHeight: 150 })
-    .linearGradient({ angle: 110, colors: [['#FFFFFF', 0], ['#EEF8F3', 0.65], ['#E8F2FA', 1]] })
+    .linearGradient({ angle: 110, colors: [[$r('app.color.score_gradient_start'), 0],
+      [$r('app.color.score_gradient_middle'), 0.65], [$r('app.color.score_gradient_end'), 1]] })
     .borderRadius(26).border({ width: 1, color: BORDER_GLASS })
     .shadow({ radius: 12, color: '#08138654', offsetY: 4 })
   }
@@ -2019,7 +2030,7 @@ struct Index {
           .fontSize(16)
           .fontWeight(FontWeight.Bold)
           .fontColor('#FFFFFF')
-          .backgroundColor(CORAL)
+          .backgroundColor(ACTION_RED)
           .borderRadius(20)
           .onClick(() => {
             this.clearHardReminder();
@@ -2056,7 +2067,7 @@ struct Index {
     .height(128)
   }
   @Builder
-  private AlertImageBox(resource: Resource, background: string) {
+  private AlertImageBox(resource: Resource, background: ResourceColor) {
     Stack() {
       Image(resource)
         .width('92%')
@@ -2076,7 +2087,7 @@ struct Index {
           .fontSize(22)
           .fontWeight(FontWeight.Bold)
           .fontColor(INK)
-        Text('会删除统计记录并恢复默认设置。')
+        Text('会删除统计记录并恢复守护设置，外观偏好保留。')
           .fontSize(15)
           .fontColor(MUTED)
           .textAlign(TextAlign.Center)
@@ -2101,7 +2112,7 @@ struct Index {
             .fontSize(15)
             .fontWeight(FontWeight.Bold)
             .fontColor('#FFFFFF')
-            .backgroundColor(CORAL)
+            .backgroundColor(ACTION_RED)
             .borderRadius(18)
             .onClick(() => {
               this.confirmClearData();
@@ -2157,7 +2168,7 @@ struct Index {
             .fontSize(15)
             .fontWeight(FontWeight.Bold)
             .fontColor('#FFFFFF')
-            .backgroundColor(CORAL)
+            .backgroundColor(ACTION_RED)
             .borderRadius(18)
             .onClick(() => {
               this.confirmResetCalibration();
@@ -2213,7 +2224,7 @@ struct Index {
             .fontSize(15)
             .fontWeight(FontWeight.Bold)
             .fontColor('#FFFFFF')
-            .backgroundColor(CORAL)
+            .backgroundColor(ACTION_RED)
             .borderRadius(18)
             .onClick(() => {
               this.confirmToggleCoreVision();
@@ -2245,7 +2256,7 @@ struct Index {
         PostureMetricTile({ title: '嘴巴', status: '暂停', label: '等待恢复检测', icon: this.guideCorrectResource(11) })
       } else if (this.isIdleUiState() || this.isStartingGuard || this.isGuarding && !this.hasCurrentReading()) {
         PostureMetricTile({ title: '坐姿', status: '待识别', label: '肩颈与躯干', icon: this.guideCorrectResource(1) })
-        PostureMetricTile({ title: '抬头', status: '待识别', color: BLUE, softColor: BLUE_SOFT,
+        PostureMetricTile({ title: '抬头', status: '待识别',
           label: '未识别人脸', icon: this.guideCorrectResource(3) })
         PostureMetricTile({ title: '嘴巴', status: '待识别',
           label: '等待嘴部信号', icon: this.guideCorrectResource(11) })
@@ -2292,7 +2303,8 @@ struct Index {
         .height(54)
         .width('100%')
         .backgroundColor(this.guardButtonColor())
-        .attributeModifier(new ImmersiveSurface(this.isGuarding ? '#D9E85549' : '#D9138654'))
+        .attributeModifier(new ImmersiveSurface(this.isGuarding ? $r('app.color.material_action_red') :
+          $r('app.color.material_action_green'), this.immersiveLevel))
         .borderRadius(27)
         .shadow({ radius: 10, color: (this.isGuarding || this.isStoppingGuard) ? SHADOW_CORAL : SHADOW_GREEN, offsetY: 3 })
         .opacity(this.actionOpacity())
@@ -2561,7 +2573,7 @@ struct Index {
     .padding(16)
     .backgroundColor(GLASS_GREEN)
     .borderRadius(22)
-    .border({ width: 1, color: '#D9EEDF' })
+    .border({ width: 1, color: LINE_SOFT })
     .shadow({ radius: 16, color: SHADOW_CARD, offsetY: 6 })
   }
   @Builder
@@ -2606,8 +2618,8 @@ struct Index {
     }
     return this.isGuarding ? '结束守护' : '开始守护';
   }
-  private guardButtonColor(): string {
-    return (this.isGuarding || this.isStoppingGuard) ? CORAL : GREEN;
+  private guardButtonColor(): ResourceColor {
+    return (this.isGuarding || this.isStoppingGuard) ? ACTION_RED : ACTION_GREEN;
   }
   private switchTab(index: number): void {
     if (this.controlsLocked()) {
@@ -2729,7 +2741,7 @@ struct Index {
     }
     return this.alertIncorrectResource(alert);
   }
-  private postureToneColor(): string {
+  private postureToneColor(): ResourceColor {
     const alert = this.primaryPostureAlert();
     if (alert === PostureAlertType.NONE) {
       return GREEN;
@@ -2740,7 +2752,7 @@ struct Index {
     }
     return YELLOW;
   }
-  private postureSoftColor(): string {
+  private postureSoftColor(): ResourceColor {
     const alert = this.primaryPostureAlert();
     if (alert === PostureAlertType.NONE) {
       return GREEN_SOFT;
@@ -2751,16 +2763,16 @@ struct Index {
     }
     return YELLOW_SOFT;
   }
-  private postureFigureBackground(): string {
+  private postureFigureBackground(): ResourceColor {
     const alert = this.primaryPostureAlert();
     if (alert === PostureAlertType.NONE) {
-      return '#F4FBF6';
+      return GLASS_GREEN;
     }
     if (this.sitLevel === PostureLevel.BAD || this.chinLevel === PostureLevel.BAD ||
       this.mouthLevel === PostureLevel.BAD) {
-      return '#FFF1EE';
+      return RED_SOFT;
     }
-    return '#FFF9EA';
+    return YELLOW_SOFT;
   }
   @Builder
   private StatsPage() {
@@ -2855,7 +2867,7 @@ struct Index {
             }
             .width('100%')
             .height(8)
-            .backgroundColor('#EDF2EA')
+            .backgroundColor(GLASS_SOFT)
             .borderRadius(4)
           }
           .width('100%')
@@ -3121,7 +3133,7 @@ struct Index {
             .fontSize(12)
             .fontWeight(FontWeight.Bold)
             .fontColor('#FFFFFF')
-            .backgroundColor(GREEN)
+            .backgroundColor(ACTION_GREEN)
             .borderRadius(15)
             .onClick(() => {
               this.markDebugFeedback(record, true);
@@ -3132,9 +3144,9 @@ struct Index {
             .fontSize(12)
             .fontWeight(FontWeight.Bold)
             .fontColor(RED)
-            .backgroundColor('#FFFFFF')
+            .backgroundColor(GLASS)
             .borderRadius(15)
-            .border({ width: 1, color: '#F0C9C5' })
+            .border({ width: 1, color: LINE_SOFT })
             .onClick(() => {
               this.markDebugFeedback(record, false);
             })
@@ -3313,7 +3325,7 @@ struct Index {
       }
       .width('100%')
       .height(8)
-      .backgroundColor('#EDF2EA')
+      .backgroundColor(GLASS_SOFT)
       .borderRadius(4)
       Row() {
         Text(this.formatDebugNumber(minValue, unit === '°' ? 1 : 2) + unit)
@@ -3511,6 +3523,7 @@ struct Index {
   @Builder
   private SettingsPage() {
     Column({ space: 4 }) {
+      this.AppearancePanel()
       this.CalibrationPanel()
       this.SamplingPanel()
       this.PrivacyPanel()
@@ -3519,13 +3532,67 @@ struct Index {
         Text('本机数据').fontSize(15).fontColor(INK).layoutWeight(1)
         Button('清空本机数据').fontSize(13).fontColor(RED).height(40)
           .padding({ left: 14, right: 14 }).backgroundColor(RED_SOFT)
+          .attributeModifier(new ContentLightSurface(this.immersiveLevel))
           .enabled(!this.controlsLocked()).opacity(this.actionOpacity())
           .onClick(() => { this.requestClearData(); })
       }.width('100%').padding({ top: 14, bottom: 14 })
-      Text('坐直了 0.2.5').fontSize(11).fontColor(MUTED).margin({ top: 12 })
+      Text('坐直了 0.2.6').fontSize(11).fontColor(MUTED).margin({ top: 12 })
     }
     .width('100%')
   }
+  @Builder
+  private AppearancePanel() {
+    Column({ space: 10 }) {
+      this.SettingsSectionTitle('外观', $r('sys.symbol.sun_max'), BLUE)
+      Row() {
+        Text('沉浸光感').fontSize(14).fontColor(INK).layoutWeight(1)
+        Text(this.immersiveLevel.toString() + ' / 5').fontSize(14).fontColor(GREEN_DEEP)
+          .fontWeight(FontWeight.Medium).width(48).textAlign(TextAlign.End)
+      }.width('100%')
+      Slider({ value: this.immersiveLevel, min: 1, max: 5, step: 1, style: SliderStyle.OutSet })
+        .id('immersive-level-slider').width('100%').height(36)
+        .selectedColor(GREEN).trackColor(GLASS_SOFT).showSteps(true)
+        .enabled(this.appearanceReady && this.immersiveSupported && !this.controlsLocked())
+        .accessibilityText('沉浸光感等级，当前第' + this.immersiveLevel.toString() + '档')
+        .onChange((value: number) => { this.setImmersiveLevel(value); })
+      Row() {
+        ForEach([1, 2, 3, 4, 5], (level: number) => {
+          Text(level.toString()).fontSize(11).fontColor(level === this.immersiveLevel ? GREEN_DEEP : MUTED)
+            .width(20).textAlign(TextAlign.Center)
+        }, (level: number) => level.toString())
+      }.width('100%').justifyContent(FlexAlign.SpaceBetween)
+      if (!this.immersiveSupported) {
+        Text('此设备暂不支持沉浸材质').fontSize(12).fontColor(MUTED).width('100%')
+      }
+      if (this.appearanceError.length > 0) {
+        Row({ space: 8 }) {
+          Text(this.appearanceError).fontSize(12).fontColor(RED).layoutWeight(1)
+          Button('重试').fontSize(12).fontColor(INK).backgroundColor(GLASS_SOFT)
+            .height(32).enabled(this.appearanceReady && !this.controlsLocked())
+            .onClick(() => { this.setImmersiveLevel(this.immersiveLevel); })
+        }.width('100%')
+      }
+    }.width('100%').padding({ top: 12, bottom: 20 }).border({ width: { bottom: 1 }, color: LINE_SOFT })
+  }
+
+  private async setImmersiveLevel(value: number): Promise<void> {
+    if (!this.appearanceReady || !this.immersiveSupported || this.controlsLocked()) {
+      return;
+    }
+    const level = normalizeImmersiveLevel(value);
+    if (level === this.immersiveLevel && this.appearanceError.length === 0) {
+      return;
+    }
+    this.immersiveLevel = level;
+    const operationId = ++this.appearanceSaveId;
+    const pageRunId = this.pageRunId;
+    const context = this.abilityContext();
+    const saved = context ? await AppearanceStore.save(context, level) : false;
+    if (operationId === this.appearanceSaveId && this.isCurrentPageRun(pageRunId)) {
+      this.appearanceError = saved ? '' : '外观设置未保存，请重试';
+    }
+  }
+
   @Builder
   private FloatingPanel() {
     Column({ space: 10 }) {
@@ -3556,7 +3623,7 @@ struct Index {
       Text(this.calibrationProgressText).width('100%').fontSize(15).lineHeight(23).fontColor(INK)
       Text('嘴唇自然轻合，肩膀放松').width('100%').fontSize(13).fontColor(MUTED)
       Progress({ value: Math.max(0, this.calibrationProgressPercent), total: 100, type: ProgressType.Linear })
-        .width('100%').color(GREEN).backgroundColor('#DDE8E1').style({ strokeWidth: 6 })
+        .width('100%').color(GREEN).backgroundColor($r('app.color.progress_track')).style({ strokeWidth: 6 })
       Button(this.calibrationCancelled ? '正在取消' : '取消校准').height(36).fontSize(13).fontColor(MUTED)
         .backgroundColor(GLASS_SOFT).enabled(!this.calibrationCancelled)
         .onClick(() => { this.calibrationCancelled = true; })
@@ -3591,7 +3658,7 @@ struct Index {
                 .fontColor(this.calibrationProgressColor())
                 .textAlign(TextAlign.Center)
                 .lineHeight(24)
-                .backgroundColor('#FFFFFF')
+                .backgroundColor(GLASS)
                 .borderRadius(12)
             }
           }
@@ -3608,7 +3675,7 @@ struct Index {
             }
             .width('100%')
             .height(8)
-            .backgroundColor('#DDE8F8')
+            .backgroundColor(GLASS_SOFT)
             .borderRadius(4)
           }
         }
@@ -3619,12 +3686,13 @@ struct Index {
       }
       Row({ space: 10 }) {
         Button(this.isManualOperation ? '校准中' : '校准坐姿')
-        .height(44)
+          .height(44)
           .layoutWeight(1)
           .fontSize(15)
           .fontWeight(FontWeight.Bold)
           .fontColor('#FFFFFF')
-          .backgroundColor(GREEN)
+          .backgroundColor(ACTION_GREEN)
+          .attributeModifier(new ContentLightSurface(this.immersiveLevel))
           .borderRadius(20)
           .opacity(this.actionOpacity())
           .enabled(!this.controlsLocked())
@@ -3638,8 +3706,8 @@ struct Index {
           .fontWeight(FontWeight.Bold)
           .fontColor(INK)
           .backgroundColor(GLASS_SOFT)
+          .attributeModifier(new ContentLightSurface(this.immersiveLevel))
           .borderRadius(20)
-          .border({ width: 1, color: LINE_SOFT })
           .opacity(this.actionOpacity())
           .enabled(!this.controlsLocked())
           .onClick(() => {
@@ -3695,7 +3763,9 @@ struct Index {
     }
       .height(40)
       .layoutWeight(1)
-      .backgroundColor(this.isSensitivitySelected(value) ? '#FFFFFF' : '#00000000')
+      .backgroundColor(this.isSensitivitySelected(value) ? GLASS : '#00000000')
+      .attributeModifier(new ContentLightSurface(this.immersiveLevel,
+        this.isSensitivitySelected(value)))
       .borderRadius(21)
       .opacity(this.actionOpacity())
       .enabled(!this.controlsLocked())
@@ -3712,7 +3782,9 @@ struct Index {
       .fontSize(14)
       .fontWeight(FontWeight.Bold)
       .fontColor(this.settings.profile.sampleIntervalMs === value ? GREEN_DEEP : MUTED)
-      .backgroundColor(this.settings.profile.sampleIntervalMs === value ? '#FFFFFF' : '#00000000')
+      .backgroundColor(this.settings.profile.sampleIntervalMs === value ? GLASS : '#00000000')
+      .attributeModifier(new ContentLightSurface(this.immersiveLevel,
+        this.settings.profile.sampleIntervalMs === value))
       .borderRadius(21)
       .opacity(this.actionOpacity())
       .enabled(!this.controlsLocked())
@@ -3743,7 +3815,7 @@ struct Index {
     .border({ width: { bottom: 1 }, color: LINE_SOFT })
   }
   @Builder
-  private SettingsSectionTitle(title: string, symbol: Resource, color: string) {
+  private SettingsSectionTitle(title: string, symbol: Resource, color: ResourceColor) {
     Row({ space: 8 }) {
       SymbolGlyph(symbol).fontSize(18).fontColor([color])
       Text(title).fontSize(16).fontWeight(FontWeight.Bold).fontColor(INK)
