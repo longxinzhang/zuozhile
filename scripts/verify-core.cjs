@@ -6,7 +6,7 @@ const vm = require('node:vm');
 const { execFileSync } = require('node:child_process');
 
 const root = path.resolve(__dirname, '..');
-const baseline = process.argv[2] || '5f1e38f';
+const baseline = process.argv[2] || 'fac06c8';
 const sdkRoot = process.env.DEVECO_HOME || '/Applications/DevEco-Studio.app';
 const ts = require(path.join(sdkRoot,
   'Contents/sdk/default/openharmony/ets/build-tools/ets-loader/node_modules/typescript'));
@@ -24,16 +24,16 @@ function source(file, previous) {
 }
 
 const protectedFiles = [
-  'models/PostureTypes.ets', 'models/PostureEvaluator.ets', 'models/PostureCalibration.ets',
-  'models/ReminderEngine.ets', 'models/SessionStats.ets', 'services/CoreVisionPostureDetector.ets',
+  'models/ReminderEngine.ets', 'models/SessionStats.ets',
   'services/CoreVisionPostureSource.ets', 'services/PostureSessionStore.ets'
 ];
 for (const name of protectedFiles) {
   assert.equal(source(sourceRoot + name, false), source(sourceRoot + name, true), `${name} changed`);
 }
 
-const protectedMethods = ['startGuard', 'stopGuard', 'captureFrame', 'applyResult', 'appendRecord',
-  'shouldAdoptMetric', 'calibrateFromCurrent', 'setSensitivity', 'setIntervalMs', 'buildSessionReport'];
+// Explicitly authorized changes: automatic calibration, lifecycle cleanup, unavailable mouth data.
+const protectedMethods = ['captureFrame', 'applyResult', 'appendRecord',
+  'shouldAdoptMetric', 'setSensitivity', 'setIntervalMs', 'buildSessionReport'];
 function pageMethod(previous, name) {
   const text = source(sourceRoot + 'pages/Index.ets', previous).replace('struct Index {', 'class Index {');
   const tree = ts.createSourceFile('Index.ts', text, ts.ScriptTarget.Latest, true);
@@ -45,6 +45,19 @@ function pageMethod(previous, name) {
 for (const name of protectedMethods) {
   assert.equal(pageMethod(false, name), pageMethod(true, name), `${name} changed`);
 }
+function declarations(file, previous) {
+  const tree = ts.createSourceFile(file, source(sourceRoot + file, previous), ts.ScriptTarget.Latest, true);
+  return new Map(tree.statements.filter(ts.isFunctionDeclaration).map(node => [node.name.text, node.getText(tree)]));
+}
+const oldRules = declarations('models/PostureEvaluator.ets', true);
+const newRules = declarations('models/PostureEvaluator.ets', false);
+for (const [name, body] of oldRules) {
+  if (!['evaluateMouth', 'evaluatePosture'].includes(name)) {
+    assert.equal(newRules.get(name), body, `Posture rule ${name} changed`);
+  }
+}
+assert.equal(declarations('models/PostureCalibration.ets', false).get('inspectCalibrationSamples'),
+  declarations('models/PostureCalibration.ets', true).get('inspectCalibrationSamples'));
 
 // Compare actual rule execution against the last shipped version with identical clocks and samples.
 function loader(previous) {
@@ -127,8 +140,36 @@ console.log(`PASS: ${protectedFiles.length} core files unchanged from ${baseline
 console.log(`PASS: ${protectedMethods.length} sampling, calibration, reminder and session methods unchanged`);
 console.log(`PASS: ${evaluations} evaluations, ${reminders} reminder decisions, calibration and daily stats match`);
 
+for (let tick = 0; tick < 420; tick++) {
+  const profile = types.createDefaultCalibration();
+  const sample = generate(tick, profile);
+  const original = newEvaluate(sample, profile);
+  sample.face.mouthAvailable = false;
+  sample.face.mouthOpenRatio = 0.95;
+  const result = newEvaluate(sample, profile);
+  assert.deepEqual(normalize(result.sit), normalize(original.sit));
+  assert.deepEqual(normalize(result.chin), normalize(original.chin));
+  assert.equal(result.mouth.level, types.PostureLevel.UNKNOWN);
+  assert.equal(result.mouth.alertType, types.PostureAlertType.NONE);
+  assert.equal(result.score, Math.round((result.sit.score * .4 + result.chin.score * .45) / .85));
+  assert.ok(!result.activeAlerts.includes(types.PostureAlertType.ITEM_11));
+}
+const mouthBaseline = types.createDefaultCalibration();
+const withoutMouth = Array.from({ length: 5 }, () => {
+  const sample = generate(0, mouthBaseline);
+  sample.face.mouthAvailable = false;
+  sample.face.mouthOpenRatio = 0;
+  return sample;
+});
+assert.equal(after('models/PostureCalibration').buildCalibrationProfile(withoutMouth, mouthBaseline).neutralMouthRatio,
+  mouthBaseline.neutralMouthRatio);
+const detector = source(sourceRoot + 'services/CoreVisionPostureDetector.ets', false);
+assert.ok(!detector.includes('estimateMouthRatio'));
+assert.equal((detector.match(/mouthAvailable: false/g) || []).length, 3);
+console.log('PASS: unavailable mouth is explicit, excluded from score and baseline; sit/chin rules unchanged');
+
 // Exercise display-only states separately from the unchanged detection rules.
-assert.match(pageMethod(false, 'lastSample'), /^@State\s+private lastSample/,
+assert.match(pageMethod(false, 'lastSample'), /^@State\s+@Watch\('syncFloatingState'\)\s+private lastSample/,
   'The first sample must invalidate waiting-state builders');
 for (const [file, components] of [
   ['components/PostureMetricTile.ets', ['PostureMetricTile']],
@@ -241,4 +282,135 @@ async function verifyRecovery() {
   assert.equal(ui.summary, '相机不可用');
   console.log('PASS: recovery ordering, idle retry, busy lock, page disposal and recovery failure');
 }
-verifyRecovery().catch((error) => { console.error(error); process.exitCode = 1; });
+async function verifyNewFlows() {
+  await verifyRecovery();
+  const capture = after('models/CalibrationCapture').captureCalibration;
+  let completed = [];
+  let calls = 0;
+  const healthy = async () => { calls++; return generate(0, mouthBaseline); };
+  const progress = (n, total) => completed.push([n, total]);
+  assert.equal((await capture(healthy, () => false, progress, 5)).isUsable, true);
+  assert.equal(calls, 5);
+  assert.deepEqual(completed, [[1,5],[2,5],[3,5],[4,5],[5,5]]);
+  calls = 0;
+  assert.equal((await capture(healthy, () => true, progress, 5)).cancelled, true);
+  assert.equal(calls, 0);
+  completed = [];
+  assert.equal((await capture(healthy, () => calls > 0, progress, 5)).cancelled, true);
+  assert.equal(completed.length, 0);
+  const absent = async () => { const s = await healthy(); s.face.confidence = 0; s.skeleton = {}; return s; };
+  assert.equal((await capture(absent, () => false, progress, 5)).isUsable, false);
+  await assert.rejects(capture(async () => { throw new Error('camera failed'); }, () => false, progress, 5),
+    /camera failed/);
+  const { floatingScore, floatingStatus } = after('models/FloatingStatus');
+  const reading = { score: 92, summary: '坐姿在线', timestamp: now, guarding: true, foreground: true, simulated: false };
+  assert.equal(floatingScore(reading, now), '92');
+  assert.equal(floatingStatus(reading, now), '坐姿在线');
+  for (const invalid of [{ foreground: false }, { guarding: false }, { timestamp: 0 },
+    { timestamp: now - 15001 }, { timestamp: now + 1 }]) {
+    assert.equal(floatingScore({ ...reading, ...invalid }, now), '--');
+  }
+  assert.ok(floatingStatus({ ...reading, simulated: true }, now).includes('模拟'));
+  console.log('PASS: five-frame calibration, cancel-before/during-frame, no-person rejection, capture errors and stale float state');
+  await verifyGuardLifecycle();
+}
+
+function guardHarness(mode = 'healthy') {
+  const calls = [];
+  const methods = ['startGuard', 'stopGuard', 'runCalibration', 'calibrateFromCurrent', 'releasePostureSource',
+    'onForegroundChanged', 'copySettings', 'controlsLocked'];
+  const compiled = ts.transpileModule(`class GuardHarness { ${methods.map(name => pageMethod(false, name)).join('\n')} }
+    new GuardHarness();`, { compilerOptions: { target: ts.ScriptTarget.ES2020 } }).outputText;
+  const page = vm.runInNewContext(compiled, {
+    Date: TestDate, ReminderAction: types.ReminderAction,
+    captureCalibration: after('models/CalibrationCapture').captureCalibration,
+    buildCalibrationProfile: after('models/PostureCalibration').buildCalibrationProfile,
+    QUICK_CALIBRATION_FRAME_COUNT: 5, CALIBRATION_FRAME_COUNT: 10,
+    CALIBRATION_COUNTDOWN_SECONDS: 3, CALIBRATION_COUNTDOWN_DELAY_MS: 1000,
+    setInterval: () => { calls.push('timer'); return 1; }, clearInterval: () => calls.push('clear-timer')
+  });
+  Object.assign(page, {
+    isGuarding: false, isSampling: false, isStartingGuard: false, isStoppingGuard: false,
+    isManualOperation: false, pageRunId: 1, guardRunId: 0, timer: -1, appForeground: true,
+    settings: normalize(types.createDefaultSettings()), saveCount: 0, captured: 0,
+    clearSessionReport: () => calls.push('clear-report'), abilityContext: () => ({}),
+    isCurrentPageRun: id => id === page.pageRunId,
+    prepareSourceAccess: async () => true,
+    rebuildPostureSource: async () => calls.push('prepare-source'),
+    syncSourceStatus: () => calls.push('sync-source'), createPostureSource: () => page.postureSource,
+    setCalibrationProgress: (text, healthy, percent) => { page.progress = { text, healthy, percent }; },
+    sleep: async () => { if (mode === 'countdown-cancel') page.calibrationCancelled = true; },
+    formatClock: () => '12:00:00', resetDisplayStability: () => {}, resetReminderState: () => {},
+    cancelHardReminderTimer: () => {}, stopReminderFeedback: () => {},
+    persistData: () => { page.saveCount++; }, captureFrame: () => calls.push('capture-live'),
+    buildSessionReport: () => calls.push('report'),
+    reminder: { reset: () => calls.push('reset-reminder') },
+    guardWindow: { enter: async () => calls.push('enter-window'), leave: async () => calls.push('leave-window'),
+      statusDetail: () => '' },
+    postureSource: {
+      sample: async () => {
+        page.captured++;
+        if (mode === 'throw') throw new Error('camera failed');
+        if (mode === 'cancel') page.calibrationCancelled = true;
+        if (mode === 'background') { page.appForeground = false; page.onForegroundChanged(); }
+        if (mode === 'disappear') page.pageRunId++;
+        const frame = generate(0, page.settings.profile);
+        if (mode === 'absent') { frame.face.confidence = 0; frame.skeleton = {}; }
+        return frame;
+      },
+      dispose: async () => calls.push('dispose')
+    }
+  });
+  return { page, calls };
+}
+
+async function verifyGuardLifecycle() {
+  for (const mode of ['healthy', 'cancel', 'countdown-cancel', 'absent', 'throw', 'background', 'disappear']) {
+    const { page, calls } = guardHarness(mode);
+    const oldProfile = normalize(page.settings.profile);
+    await page.startGuard();
+    if (mode === 'healthy') {
+      assert.equal(page.captured, 5);
+      assert.equal(page.saveCount, 1);
+      assert.equal(page.isGuarding, true);
+      assert.equal(page.lastSample, undefined, 'Calibration must not appear as a live reading');
+      assert.equal(page.progress.percent, 100);
+      assert.ok(calls.indexOf('enter-window') < calls.indexOf('capture-live'));
+      await page.stopGuard(true, true);
+      assert.equal(page.isGuarding, false);
+      assert.ok(calls.includes('report'));
+      assert.ok(calls.includes('dispose'));
+      assert.ok(calls.includes('leave-window'));
+      await page.startGuard();
+      assert.equal(page.captured, 10, 'Each new session must calibrate again');
+      await page.stopGuard();
+    } else {
+      assert.equal(page.saveCount, 0, `${mode} must not persist baseline`);
+      assert.deepEqual(normalize(page.settings.profile), oldProfile);
+      assert.equal(page.isGuarding, false);
+      assert.equal(page.isStartingGuard, false);
+      assert.equal(page.isSampling, false);
+      assert.equal(calls.filter(v => v === 'dispose').length, 1);
+      assert.ok(!calls.includes('capture-live'));
+      assert.ok(!calls.includes('timer'));
+    }
+  }
+  const { page } = guardHarness();
+  await page.calibrateFromCurrent();
+  assert.equal(page.captured, 10);
+  assert.equal(page.saveCount, 1);
+  assert.equal(page.isManualOperation, false);
+  assert.equal(page.isGuarding, false);
+  const disposing = guardHarness();
+  let release;
+  let released = 0;
+  disposing.page.postureSource.dispose = () => { released++; return new Promise(resolve => { release = resolve; }); };
+  const first = disposing.page.releasePostureSource();
+  const second = disposing.page.releasePostureSource();
+  assert.equal(released, 1);
+  release();
+  await first;
+  await second;
+  console.log('PASS: actual start/stop/manual-calibration methods, repeat starts, no baseline writes on cancellation/failure, serialized disposal');
+}
+verifyNewFlows().catch((error) => { console.error(error); process.exitCode = 1; });

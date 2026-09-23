@@ -134,7 +134,9 @@ export function buildCalibrationProfile(samples: PostureSample[], previous?: Cal
       pitchValues.push(sample.face.pitch);
       rollValues.push(sample.face.roll);
       yawValues.push(sample.face.yaw);
-      mouthValues.push(sample.face.mouthOpenRatio);
+      if (sample.face.mouthAvailable !== false) {
+        mouthValues.push(sample.face.mouthOpenRatio);
+      }
       if (sample.face.rect) {
         faceCenterYValues.push(sample.face.rect.top + sample.face.rect.height / 2);
         faceHeightValues.push(sample.face.rect.height);

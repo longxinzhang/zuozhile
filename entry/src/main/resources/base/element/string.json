@@ -1,5 +1,6 @@
 {
   "string": [
+    { "name": "float_reason", "value": "用于显示坐姿分数和检测状态，不显示摄像画面。" },
     {
       "name": "module_desc",
       "value": "坐直了姿态守护模块"

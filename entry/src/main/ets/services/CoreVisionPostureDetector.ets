@@ -188,7 +188,8 @@ export class CoreVisionPostureDetector {
       yaw: 0,
       pitch: 0,
       roll: 0,
-      mouthOpenRatio: 0.16,
+      mouthOpenRatio: 0,
+      mouthAvailable: false,
       confidence: 0,
       rect: {
         left: 0,
@@ -212,7 +213,9 @@ export class CoreVisionPostureDetector {
       yaw: this.safeFaceNumber(face.pose.yaw),
       pitch: this.safeFaceNumber(face.pose.pitch),
       roll: this.safeFaceNumber(face.pose.roll),
-      mouthOpenRatio: this.estimateMouthRatio(face),
+      // Five-point landmarks have mouth corners, but no upper/lower lip measurement.
+      mouthOpenRatio: 0,
+      mouthAvailable: false,
       confidence: this.safeFaceNumber(face.probability),
       rect: {
         left: this.safeFaceNumber(rect.left),
@@ -272,37 +275,6 @@ export class CoreVisionPostureDetector {
     return face ? this.safeFaceRect(face) : this.emptyFaceFrame();
   }
 
-  private estimateMouthRatio(face: faceDetector.Face): number {
-    if (!face.points || face.points.length < 2 || !face.rect || finiteOr(face.rect.height, 0) <= 0) {
-      return 0.16;
-    }
-    const rectTop = finiteOr(face.rect.top, 0);
-    const rectHeight = Math.max(finiteOr(face.rect.height, 0), 1);
-    const lowerHalfPoints = face.points.filter((point: faceDetector.FacePoint) =>
-      Number.isFinite(point.y) && point.y > rectTop + rectHeight * 0.55);
-    if (lowerHalfPoints.length < 2) {
-      return 0.16;
-    }
-    let minY = lowerHalfPoints[0].y;
-    let maxY = lowerHalfPoints[0].y;
-    lowerHalfPoints.forEach((point: faceDetector.FacePoint) => {
-      if (point.y < minY) {
-        minY = point.y;
-      }
-      if (point.y > maxY) {
-        maxY = point.y;
-      }
-    });
-    const roughOpen = Math.abs(maxY - minY) / Math.max(face.rect.height, 1);
-    if (roughOpen < 0.04) {
-      return 0.16;
-    }
-    if (roughOpen > 0.7) {
-      return 0.7;
-    }
-    return roughOpen;
-  }
-
   private errorSummary(error: Error): string {
     let message = error.message;
     if (message === undefined || message.length === 0) {
@@ -329,7 +301,8 @@ export function createEmptyPostureSample(): PostureSample {
       yaw: 0,
       pitch: 0,
       roll: 0,
-      mouthOpenRatio: 0.16,
+      mouthOpenRatio: 0,
+      mouthAvailable: false,
       confidence: 0,
       rect: {
         left: 0,

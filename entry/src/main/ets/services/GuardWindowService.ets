@@ -21,21 +21,26 @@ function errorSummary(error: Error): string {
 }
 
 export class GuardWindowService {
+  private static mainWindow?: window.Window;
   private isActive: boolean = false;
   private previousBrightness: number = -1;
   private detail: string = '守护窗口待开启';
+
+  static setMainWindow(mainWindow: window.Window): void {
+    GuardWindowService.mainWindow = mainWindow;
+  }
 
   async enter(context: common.UIAbilityContext): Promise<void> {
     if (this.isActive) {
       return;
     }
     try {
-      const currentWindow = await window.getLastWindow(context);
+      const currentWindow = GuardWindowService.mainWindow ?? await window.getLastWindow(context);
       const properties = currentWindow.getWindowProperties();
       this.previousBrightness = properties.brightness;
+      this.isActive = true;
       await currentWindow.setWindowKeepScreenOn(true);
       await currentWindow.setWindowBrightness(GUARD_BRIGHTNESS);
-      this.isActive = true;
       this.detail = '守护窗口常亮 · 低亮度';
       hilog.info(DOMAIN, TAG, '%{public}s', this.detail);
     } catch (error) {
@@ -45,6 +50,9 @@ export class GuardWindowService {
   }
 
   async leave(context: common.UIAbilityContext | undefined): Promise<void> {
+    if (!this.isActive) {
+      return;
+    }
     if (!context) {
       this.isActive = false;
       this.previousBrightness = -1;
@@ -52,9 +60,9 @@ export class GuardWindowService {
       return;
     }
     try {
-      const currentWindow = await window.getLastWindow(context);
+      const currentWindow = GuardWindowService.mainWindow ?? await window.getLastWindow(context);
       await currentWindow.setWindowKeepScreenOn(false);
-      if (this.previousBrightness >= 0) {
+      if (this.previousBrightness >= -1) {
         await currentWindow.setWindowBrightness(this.previousBrightness);
       }
       this.detail = '守护窗口已恢复';

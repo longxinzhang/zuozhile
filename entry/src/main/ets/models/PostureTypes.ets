@@ -61,6 +61,7 @@ export interface FaceFrame {
   pitch: number;
   roll: number;
   mouthOpenRatio: number;
+  mouthAvailable?: boolean;
   confidence: number;
   rect?: FaceRect;
 }

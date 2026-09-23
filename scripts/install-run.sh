@@ -30,8 +30,19 @@ if [ -f "$SIGNED_HAP" ]; then
   HAP_PATH="$SIGNED_HAP"
 fi
 
-"$HDC" -t "$TARGET" install -r "$HAP_PATH"
-"$HDC" -t "$TARGET" shell "aa start -a $ABILITY_NAME -b $BUNDLE_NAME"
+INSTALL_OUTPUT="$("$HDC" -t "$TARGET" install -r "$HAP_PATH")"
+printf '%s\n' "$INSTALL_OUTPUT"
+if [[ "$INSTALL_OUTPUT" != *"install bundle successfully"* ]]; then
+  echo "Device did not confirm installation. App was not started." >&2
+  exit 1
+fi
+
+START_OUTPUT="$("$HDC" -t "$TARGET" shell "aa start -a $ABILITY_NAME -b $BUNDLE_NAME")"
+printf '%s\n' "$START_OUTPUT"
+if [[ "$START_OUTPUT" != *"start ability successfully"* ]]; then
+  echo "App installed, but device did not confirm launch (check screen lock)." >&2
+  exit 1
+fi
 
 echo "Installed and started $BUNDLE_NAME on $TARGET"
 "$HDC" -t "$TARGET" shell 'aa dump -r' | grep -A 4 "$BUNDLE_NAME" || true

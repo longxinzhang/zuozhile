@@ -312,6 +312,9 @@ function evaluateChin(face: FaceFrame, skeleton: SkeletonFrame, profile: Calibra
 }
 
 function evaluateMouth(face: FaceFrame, profile: CalibrationProfile): MetricResult {
+  if (face.mouthAvailable === false) {
+    return makeMetric(PostureLevel.UNKNOWN, 0, profile.neutralMouthRatio, 0, '嘴部检测未启用');
+  }
   const sensitivity = Math.max(profile.sensitivity, 0.6);
   if (face.confidence < 0.25) {
     return makeMetric(PostureLevel.UNKNOWN, face.mouthOpenRatio, profile.neutralMouthRatio, 72, '嘴部未识别');
@@ -353,7 +356,10 @@ export function evaluatePosture(sample: PostureSample, profile: CalibrationProfi
   const sit = evaluateSit(sample.skeleton, sample.face, profile);
   const chin = evaluateChin(sample.face, sample.skeleton, profile);
   const mouth = evaluateMouth(sample.face, profile);
-  const score = Math.round(clamp(sit.score * 0.4 + chin.score * 0.45 + mouth.score * 0.15, 0, 100));
+  const weightedScore = sample.face.mouthAvailable === false ?
+    (sit.score * 0.4 + chin.score * 0.45) / 0.85 :
+    sit.score * 0.4 + chin.score * 0.45 + mouth.score * 0.15;
+  const score = Math.round(clamp(weightedScore, 0, 100));
   const orderedAlerts = orderedActiveAlerts([sit.alertType, chin.alertType, mouth.alertType]);
   const activeAlerts = orderedAlerts.length > 0 ? [orderedAlerts[0]] : [];
   return {

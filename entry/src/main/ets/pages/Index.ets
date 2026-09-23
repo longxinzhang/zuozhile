@@ -1,5 +1,7 @@
 import { abilityAccessCtrl, common, Permissions } from '@kit.AbilityKit';
-import { buildCalibrationProfile, inspectCalibrationSamples } from '../models/PostureCalibration';
+import { SymbolGlyphModifier } from '@kit.ArkUI';
+import { buildCalibrationProfile } from '../models/PostureCalibration';
+import { captureCalibration } from '../models/CalibrationCapture';
 import { evaluatePosture } from '../models/PostureEvaluator';
 import { ReminderEngine, actionLabel, alertTypeLabel, alertTypeSubtitle, alertTypeTitle } from '../models/ReminderEngine';
 import { HourBucket, buildAlertBreakdown, buildRecentBuckets, computeTodayStats } from '../models/SessionStats';
@@ -27,10 +29,10 @@ import { PostureMetricTile } from '../components/PostureMetricTile';
 import { MockPostureSource } from '../services/MockPostureSource';
 import { CoreVisionPostureSource } from '../services/CoreVisionPostureSource';
 import { GuardWindowService } from '../services/GuardWindowService';
+import { PostureFloatService } from '../services/PostureFloatService';
 import { ReminderFeedbackService } from '../services/ReminderFeedbackService';
 import { PostureSource } from '../services/PostureSource';
 import { CameraProbeResult, CameraProbeService } from '../services/CameraProbeService';
-import { ImmersiveSurface } from '../theme/ImmersiveSurface';
 import {
   BLUE,
   APP_BG,
@@ -47,7 +49,6 @@ import {
   MUTED,
   RED,
   RED_SOFT,
-  SHADOW_BLUE,
   SHADOW_CARD,
   SHADOW_CORAL,
   SHADOW_GREEN,
@@ -128,9 +129,9 @@ const DEBUG_CALIBRATION_STEPS: DebugCalibrationStepItem[] = [
 ];
 const CAMERA_PERMISSION: Permissions = 'ohos.permission.CAMERA';
 const CALIBRATION_FRAME_COUNT = 10;
+const QUICK_CALIBRATION_FRAME_COUNT = 5;
 const CALIBRATION_COUNTDOWN_SECONDS = 3;
 const CALIBRATION_COUNTDOWN_DELAY_MS = 1000;
-const CALIBRATION_SAMPLE_DELAY_MS = 500;
 const HARD_REMINDER_TIMEOUT_MS = 8000;
 const DISPLAY_STABLE_FRAMES = 2;
 const REPORT_ALERT_PRIORITY: PostureAlertType[] = [
@@ -153,14 +154,14 @@ struct Index {
   @State private activeTab: number = 0;
   @State private activeDebugTab: number = 0;
   @State private showDebugPanel: boolean = false;
-  @State private isGuarding: boolean = false;
+  @State @Watch('syncFloatingState') private isGuarding: boolean = false;
   @State private isStartingGuard: boolean = false;
   @State private isStoppingGuard: boolean = false;
   @State private isManualOperation: boolean = false;
   @State private settings: UserSettings = createDefaultSettings();
   @State private records: SessionRecord[] = [];
-  @State private score: number = 92;
-  @State private summary: string = '坐姿在线';
+  @State @Watch('syncFloatingState') private score: number = 92;
+  @State @Watch('syncFloatingState') private summary: string = '坐姿在线';
   @State private sitLevel: PostureLevel = PostureLevel.GOOD;
   @State private chinLevel: PostureLevel = PostureLevel.GOOD;
   @State private mouthLevel: PostureLevel = PostureLevel.GOOD;
@@ -179,6 +180,11 @@ struct Index {
   @State private showResetCalibrationConfirm: boolean = false;
   @State private showCoreVisionConfirm: boolean = false;
   @State private calibrationProgressText: string = '';
+  @State private isCalibrating: boolean = false;
+  @State private calibrationCancelled: boolean = false;
+  @StorageLink('appForeground') @Watch('onForegroundChanged') private appForeground: boolean = true;
+  @StorageProp('floatVisible') private floatVisible: boolean = false;
+  @StorageProp('floatMessage') private floatMessage: string = '';
   @State private isCalibrationProgressHealthy: boolean = true;
   @State private calibrationProgressPercent: number = -1;
   @State private lastSampleText: string = '尚未采样';
@@ -198,8 +204,7 @@ struct Index {
   @State private sessionReportAdvice: string = '';
   @State private sessionReportScore: number = 0;
   @State private debugFeedbackText: string = '';
-  private pageScroller: Scroller = new Scroller();
-  private immersiveSurface: ImmersiveSurface = new ImmersiveSurface();
+  private pageScrollers: Scroller[] = [new Scroller(), new Scroller(), new Scroller(), new Scroller()];
   private timer: number = -1;
   private hardReminderTimer: number = -1;
   private guardRunId: number = 0;
@@ -207,7 +212,7 @@ struct Index {
   private storageOperationId: number = 0;
   private guardSessionStartedAt: number = 0;
   private isSampling: boolean = false;
-  @State private lastSample: PostureSample | undefined = undefined;
+  @State @Watch('syncFloatingState') private lastSample: PostureSample | undefined = undefined;
   private sitCandidateKey: string = '';
   private sitCandidateCount: number = 0;
   private chinCandidateKey: string = '';
@@ -218,6 +223,7 @@ struct Index {
   private guardWindow: GuardWindowService = new GuardWindowService();
   private reminder: ReminderEngine = new ReminderEngine();
   private postureSource: PostureSource = new MockPostureSource();
+  private sourceDisposal?: Promise<void>;
   aboutToAppear(): void {
     this.pageRunId += 1;
     if (!this.loaded) {
@@ -229,7 +235,35 @@ struct Index {
   }
   aboutToDisappear(): void {
     this.pageRunId += 1;
+    this.calibrationCancelled = true;
     this.stopGuard(false);
+  }
+  private onForegroundChanged(): void {
+    if (!this.appForeground) {
+      this.calibrationCancelled = true;
+      if (this.isGuarding) {
+        this.stopGuard(true, true);
+      }
+    }
+  }
+  private syncFloatingState(): void {
+    AppStorage.setOrCreate('floatScore', this.score);
+    AppStorage.setOrCreate('floatSummary', this.summary);
+    AppStorage.setOrCreate('floatGuarding', this.isGuarding);
+    AppStorage.setOrCreate('floatSimulated', !this.settings.useCoreVision);
+    AppStorage.setOrCreate('floatTimestamp', this.hasCurrentReading() && !this.isDetectionErrorUiState() &&
+      !this.isUnrecognizedUiState() && this.lastSample ? this.lastSample.timestamp : 0);
+  }
+  private async toggleFloatingWindow(): Promise<void> {
+    this.syncFloatingState();
+    if (this.floatVisible) {
+      await PostureFloatService.close();
+    } else {
+      const context = this.abilityContext();
+      if (context) {
+        await PostureFloatService.open(context);
+      }
+    }
   }
   private abilityContext(): common.UIAbilityContext | undefined {
     const hostContext = this.getUIContext().getHostContext();
@@ -334,7 +368,7 @@ struct Index {
     return runId === this.pageRunId;
   }
   private async startGuard(ignoreOperationLock: boolean = false): Promise<void> {
-    if (this.isGuarding || (!ignoreOperationLock && this.controlsLocked())) {
+    if (this.isGuarding || this.isSampling || (!ignoreOperationLock && this.controlsLocked())) {
       return;
     }
     this.clearSessionReport();
@@ -350,10 +384,14 @@ struct Index {
       }
       await this.rebuildPostureSource();
       if (!this.isCurrentPageRun(pageRunId) || runId !== this.guardRunId) {
-        await this.postureSource.dispose();
+        await this.releasePostureSource();
         if (this.isCurrentPageRun(pageRunId)) {
           this.syncSourceStatus();
         }
+        return;
+      }
+      const calibrated = await this.runCalibration(QUICK_CALIBRATION_FRAME_COUNT, pageRunId);
+      if (!calibrated || !this.isCurrentPageRun(pageRunId) || runId !== this.guardRunId || !this.appForeground) {
         return;
       }
       const context = this.abilityContext();
@@ -371,12 +409,13 @@ struct Index {
             this.guardWindowText = this.guardWindow.statusDetail();
           }
         }
-        await this.postureSource.dispose();
+        await this.releasePostureSource();
         if (this.isCurrentPageRun(pageRunId)) {
           this.syncSourceStatus();
         }
         return;
       }
+      this.lastSample = undefined;
       this.isGuarding = true;
       this.guardSessionStartedAt = Date.now();
       this.reminder.reset();
@@ -390,7 +429,18 @@ struct Index {
       this.timer = setInterval(() => {
         this.captureFrame();
       }, this.settings.profile.sampleIntervalMs);
+    } catch (error) {
+      if (this.isCurrentPageRun(pageRunId)) {
+        this.summary = '校准失败';
+        this.setCalibrationProgress('相机采样失败，请确认权限后重试；原基线未更改', false, -1);
+      }
     } finally {
+      if (!this.isGuarding) {
+        await this.releasePostureSource();
+        if (guardWindowEntered) {
+          await this.guardWindow.leave(this.abilityContext());
+        }
+      }
       if (runId === this.guardRunId) {
         this.isStartingGuard = false;
       }
@@ -426,7 +476,10 @@ struct Index {
         this.reminderAlertType = PostureAlertType.NONE;
         this.reminderMessage = '';
       }
-      await this.postureSource.dispose();
+      while (this.isSampling) {
+        await this.sleep(20);
+      }
+      await this.releasePostureSource();
       this.isSampling = false;
       await this.guardWindow.leave(this.abilityContext());
       if (updateUi) {
@@ -735,7 +788,6 @@ struct Index {
     }
     const pageRunId = this.pageRunId;
     this.isManualOperation = true;
-    const samples: PostureSample[] = [];
     try {
       if (this.isGuarding) {
         await this.stopGuard();
@@ -752,57 +804,11 @@ struct Index {
         return;
       }
 
-      this.isSampling = true;
-      for (let second = CALIBRATION_COUNTDOWN_SECONDS; second > 0; second -= 1) {
-        const text = second.toString() + '秒后开始校准，请摆好健康姿势';
-        this.summary = text;
-        this.reminderText = '准备记录健康坐姿基线';
-        this.setCalibrationProgress(text, true, 0);
-        await this.sleep(CALIBRATION_COUNTDOWN_DELAY_MS);
-        if (!this.isCurrentPageRun(pageRunId)) {
-          return;
-        }
-      }
       await this.rebuildPostureSource();
       if (!this.isCurrentPageRun(pageRunId)) {
         return;
       }
-      for (let index = 0; index < CALIBRATION_FRAME_COUNT; index += 1) {
-        const text = '开始校准，别乱动哦，' + (index + 1).toString() + '/' + CALIBRATION_FRAME_COUNT.toString();
-        const percent = Math.round((index + 1) * 100 / CALIBRATION_FRAME_COUNT);
-        this.summary = text;
-        this.reminderText = '正在记录健康坐姿基线';
-        this.setCalibrationProgress(text, true, percent);
-        const sample = await this.postureSource.sample(this.settings.profile);
-        if (!this.isCurrentPageRun(pageRunId)) {
-          return;
-        }
-        this.lastSample = sample;
-        samples.push(sample);
-        if (index < CALIBRATION_FRAME_COUNT - 1) {
-          await this.sleep(CALIBRATION_SAMPLE_DELAY_MS);
-          if (!this.isCurrentPageRun(pageRunId)) {
-            return;
-          }
-        }
-      }
-      const next = this.copySettings(this.settings);
-      const quality = inspectCalibrationSamples(samples);
-      if (!quality.isUsable) {
-        this.summary = '校准失败';
-        this.reminderText = quality.detail;
-        this.setCalibrationProgress(quality.detail, false, 100);
-        return;
-      }
-      next.profile = buildCalibrationProfile(samples, this.settings.profile);
-      this.settings = next;
-      this.summary = '已记录当前基线';
-      this.lastSampleText = this.formatClock(next.profile.calibratedAt);
-      this.reminder.reset();
-      this.resetDisplayStability();
-      this.resetReminderState('暂无提醒');
-      this.setCalibrationProgress('校准完成，已记录当前基线', true, 100);
-      this.persistData();
+      await this.runCalibration(CALIBRATION_FRAME_COUNT, pageRunId);
     } catch (error) {
       if (!this.isCurrentPageRun(pageRunId)) {
         return;
@@ -811,15 +817,61 @@ struct Index {
       this.reminderText = '请确认人脸和上半身在画面内';
       this.setCalibrationProgress('请确认人脸和上半身在画面内', false, -1);
     } finally {
-      if (this.isSampling) {
-        await this.postureSource.dispose();
-        if (this.isCurrentPageRun(pageRunId)) {
-          this.postureSource = this.createPostureSource();
-          this.syncSourceStatus();
-        }
+      await this.releasePostureSource();
+      if (this.isCurrentPageRun(pageRunId)) {
+        this.postureSource = this.createPostureSource();
+        this.syncSourceStatus();
       }
       this.isSampling = false;
       this.isManualOperation = false;
+    }
+  }
+  private async runCalibration(count: number, pageRunId: number): Promise<boolean> {
+    this.isCalibrating = true;
+    this.calibrationCancelled = false;
+    this.isSampling = true;
+    const cancelled = (): boolean => this.calibrationCancelled || !this.appForeground ||
+      !this.isCurrentPageRun(pageRunId);
+    try {
+      for (let second = CALIBRATION_COUNTDOWN_SECONDS; second > 0; second -= 1) {
+        this.setCalibrationProgress(second.toString() + '秒后开始校准，请摆好健康姿势', true, 0);
+        await this.sleep(CALIBRATION_COUNTDOWN_DELAY_MS);
+        if (cancelled()) {
+          this.setCalibrationProgress('已取消校准，原基线未更改', true, -1);
+          return false;
+        }
+      }
+      this.setCalibrationProgress('开始校准，别乱动哦，0/' + count.toString(), true, 0);
+      const result = await captureCalibration(
+        () => this.postureSource.sample(this.settings.profile), cancelled,
+        (completed: number, total: number) => {
+          this.setCalibrationProgress('开始校准，别乱动哦，' + completed.toString() + '/' + total.toString(),
+            true, Math.round(completed * 100 / total));
+        }, count);
+      if (result.cancelled || cancelled()) {
+        this.setCalibrationProgress('已取消校准，原基线未更改', true, -1);
+        return false;
+      }
+      if (!result.isUsable) {
+        this.summary = '校准失败';
+        this.setCalibrationProgress(result.detail + '；原基线未更改', false, -1);
+        return false;
+      }
+      const next = this.copySettings(this.settings);
+      next.profile = buildCalibrationProfile(result.samples, this.settings.profile);
+      this.settings = next;
+      this.lastSample = result.samples[result.samples.length - 1];
+      this.lastSampleText = this.formatClock(next.profile.calibratedAt);
+      this.summary = '已记录当前基线';
+      this.reminder.reset();
+      this.resetDisplayStability();
+      this.resetReminderState('暂无提醒');
+      this.setCalibrationProgress('校准完成，已记录当前基线', true, 100);
+      this.persistData();
+      return true;
+    } finally {
+      this.isSampling = false;
+      this.isCalibrating = false;
     }
   }
   private resetCalibration(): void {
@@ -1036,7 +1088,7 @@ struct Index {
         return;
       }
       await this.captureFrame(true);
-      await this.postureSource.dispose();
+      await this.releasePostureSource();
       if (this.isCurrentPageRun(pageRunId)) {
         this.syncSourceStatus();
       }
@@ -1052,9 +1104,21 @@ struct Index {
     return new MockPostureSource();
   }
   private async rebuildPostureSource(): Promise<void> {
-    await this.postureSource.dispose();
+    await this.releasePostureSource();
     this.postureSource = this.createPostureSource();
     this.syncSourceStatus();
+  }
+  private async releasePostureSource(): Promise<void> {
+    if (this.sourceDisposal) {
+      await this.sourceDisposal;
+      return;
+    }
+    this.sourceDisposal = this.postureSource.dispose();
+    try {
+      await this.sourceDisposal;
+    } finally {
+      this.sourceDisposal = undefined;
+    }
   }
   private syncSourceStatus(): void {
     const status = this.postureSource.status();
@@ -1465,6 +1529,9 @@ struct Index {
       this.formatSignedNumber(face.roll, 1) + '°';
   }
   private debugMouthText(): string {
+    if (this.settings.useCoreVision) {
+      return '未启用：五点人脸模型不提供上下唇位置';
+    }
     if (!this.lastSample) {
       return '暂无';
     }
@@ -1579,6 +1646,9 @@ struct Index {
     }
   }
   private headerStatusText(): string {
+    if (this.isCalibrating) {
+      return '正在校准坐姿';
+    }
     if (this.isStartingGuard) {
       return '前台守护启动中';
     }
@@ -1597,6 +1667,9 @@ struct Index {
     return '前台守护未开启';
   }
   private headerSwitchText(): string {
+    if (this.isCalibrating) {
+      return '校准中';
+    }
     if (this.isDetectionErrorUiState()) {
       return '待恢复';
     }
@@ -1734,12 +1807,18 @@ struct Index {
         if (this.settings.useCoreVision) {
           this.CameraSurfaceHost()
         }
-        Column() {
-          this.PageBody()
-          this.TabBar()
+        Tabs({ barPosition: BarPosition.End, index: this.activeTab }) {
+          ForEach(TABS, (item: TabItem) => {
+            TabContent() {
+              this.PageBody(item.index)
+            }.tabBar(BottomTabBarStyle.of({ normal: new SymbolGlyphModifier(item.icon).fontColor([MUTED]),
+              selected: new SymbolGlyphModifier(item.icon).fontColor([GREEN]) }, item.label)
+              .labelStyle({ selectedColor: GREEN, unselectedColor: MUTED, font: { size: 11 } }))
+          }, (item: TabItem) => item.label)
         }
-        .width('100%')
-        .height('100%')
+        .width('100%').height('100%').barHeight(64).scrollable(false).animationDuration(180)
+        .onContentWillChange(() => !this.controlsLocked())
+        .onChange((index: number) => { this.switchTab(index); })
         if (this.showHardReminder) {
           this.HardReminderOverlay()
         }
@@ -1763,7 +1842,7 @@ struct Index {
     Column() {}
     .width('100%')
     .height('100%')
-    .linearGradient({ angle: 155, colors: [['#F7F9FC', 0], ['#EDF2F6', 0.6], ['#EDF6F1', 1]] })
+    .backgroundColor(APP_BG)
     .hitTestBehavior(HitTestMode.None)
   }
   @Builder
@@ -1783,17 +1862,17 @@ struct Index {
     .backgroundColor(APP_BG)
   }
   @Builder
-  private PageBody() {
-    Scroll(this.pageScroller) {
-      Column({ space: 20 }) {
+  private PageBody(index: number) {
+    Scroll(this.pageScrollers[index]) {
+      Column({ space: 16 }) {
         this.Header()
-        if (this.activeTab === 0) {
+        if (index === 0) {
           this.GuardPage()
-        } else if (this.activeTab === 1) {
+        } else if (index === 1) {
           this.StatsPage()
-        } else if (this.activeTab === 2) {
+        } else if (index === 2) {
           this.GuidePage()
-        } else if (this.activeTab === 3) {
+        } else if (index === 3) {
           this.SettingsPage()
         } else {
           this.SettingsPage()
@@ -1810,7 +1889,10 @@ struct Index {
   }
   @Builder
   private Header() {
-    Row() {
+    Row({ space: 12 }) {
+      if (this.activeTab === 0) {
+        Image($r('app.media.brand_mark')).width(44).height(44).borderRadius(12)
+      }
       Column({ space: 7 }) {
         Text(this.activeTab === 0 ? '坐直了' : TABS[this.activeTab].label)
           .fontSize(28)
@@ -1849,7 +1931,11 @@ struct Index {
   @Builder
   private GuardPage() {
     Column({ space: 12 }) {
-      this.ScorePanel()
+      if (this.isCalibrating) {
+        this.QuickCalibrationPanel()
+      } else {
+        this.ScorePanel()
+      }
       this.MetricGrid()
       this.GuardActions()
       this.PrivacyBand()
@@ -2164,16 +2250,16 @@ struct Index {
         PostureMetricTile({ title: '坐姿', status: '待识别', label: '肩颈与躯干', icon: this.guideCorrectResource(1) })
         PostureMetricTile({ title: '抬头', status: '待识别', color: BLUE, softColor: BLUE_SOFT,
           label: '未识别人脸', icon: this.guideCorrectResource(3) })
-        PostureMetricTile({ title: '嘴巴', status: '待识别', color: BLUE, softColor: BLUE_SOFT,
-          label: '嘴部未识别', icon: this.guideCorrectResource(11) })
+        PostureMetricTile({ title: '嘴巴', status: this.settings.useCoreVision ? '未启用' : '待识别',
+          label: this.settings.useCoreVision ? '当前不计分' : '嘴部未识别', icon: this.guideCorrectResource(11) })
       } else if (this.isFinishedUiState()) {
         PostureMetricTile({ title: '坐姿', status: '总结', color: GREEN, softColor: GREEN_SOFT, label: '报告已生成',
           value: this.sessionReportScore > 0 ? this.sessionReportScore.toString() + '分' : '--',
           icon: this.guideCorrectResource(1) })
         PostureMetricTile({ title: '抬头', status: '建议', color: GREEN, softColor: GREEN_SOFT,
           label: '查看统计', icon: this.guideCorrectResource(3) })
-        PostureMetricTile({ title: '嘴巴', status: '完成', color: GREEN, softColor: GREEN_SOFT,
-          label: '建议已更新', icon: this.guideCorrectResource(11) })
+        PostureMetricTile({ title: '嘴巴', status: this.settings.useCoreVision ? '未启用' : '完成',
+          label: this.settings.useCoreVision ? '当前不计分' : '建议已更新', icon: this.guideCorrectResource(11) })
       } else {
         PostureMetricTile({ title: '坐姿', status: levelText(this.sitLevel), color: levelColor(this.sitLevel),
           softColor: levelSoftColor(this.sitLevel), label: this.sitLabel,
@@ -2183,8 +2269,10 @@ struct Index {
           softColor: levelSoftColor(this.chinLevel), label: this.chinLabel,
           value: this.chinLevel === PostureLevel.UNKNOWN ? '--' : this.chinValue.toString() + '°',
           icon: this.guideCorrectResource(3) })
-        PostureMetricTile({ title: '嘴巴', status: levelText(this.mouthLevel), color: levelColor(this.mouthLevel),
-          softColor: levelSoftColor(this.mouthLevel), label: this.mouthLabel,
+        PostureMetricTile({ title: '嘴巴', status: this.settings.useCoreVision ? '未启用' : levelText(this.mouthLevel),
+          color: this.settings.useCoreVision ? MUTED : levelColor(this.mouthLevel),
+          softColor: this.settings.useCoreVision ? GLASS_SOFT : levelSoftColor(this.mouthLevel),
+          label: this.settings.useCoreVision ? '当前不计分' : this.mouthLabel,
           value: this.mouthLevel === PostureLevel.UNKNOWN ? '--' : this.mouthValue.toString(),
           icon: this.guideCorrectResource(11) })
       }
@@ -2223,6 +2311,11 @@ struct Index {
             this.startGuard();
           }
         })
+      if (!this.isCalibrating && this.calibrationProgressText.length > 0 &&
+        this.calibrationProgressPercent !== 100 && !this.isGuarding) {
+        Text(this.calibrationProgressText).width('100%').fontSize(13)
+          .fontColor(this.calibrationProgressColor()).lineHeight(20)
+      }
       if (this.isFinishedUiState()) {
         this.SessionReportCard()
       } else if (this.isDetectionErrorUiState()) {
@@ -2526,6 +2619,9 @@ struct Index {
       })
   }
   private guardButtonText(): string {
+    if (this.isCalibrating) {
+      return '正在校准';
+    }
     if (this.isManualOperation) {
       return '处理中';
     }
@@ -2548,7 +2644,7 @@ struct Index {
       return;
     }
     this.activeTab = index;
-    this.pageScroller.scrollTo({ xOffset: 0, yOffset: 0 });
+    this.pageScrollers[index].scrollTo({ xOffset: 0, yOffset: 0 });
   }
   private primaryPostureAlert(): PostureAlertType {
     if (this.reminderAction !== ReminderAction.NONE && this.reminderAlertType !== PostureAlertType.NONE) {
@@ -2623,7 +2719,7 @@ struct Index {
       return '久坐提醒';
     }
     return this.sitLevel === PostureLevel.UNKNOWN || this.chinLevel === PostureLevel.UNKNOWN ||
-      this.mouthLevel === PostureLevel.UNKNOWN ? '部分姿态可见' : '坐姿端正';
+      (!this.settings.useCoreVision && this.mouthLevel === PostureLevel.UNKNOWN) ? '部分姿态可见' : '坐姿端正';
   }
   private postureInsightAdvice(): string {
     const alert = this.primaryPostureAlert();
@@ -3474,6 +3570,7 @@ struct Index {
       this.CalibrationPanel()
       this.SamplingPanel()
       this.PrivacyPanel()
+      this.FloatingPanel()
       this.DeveloperDebugPanel()
       Button('清空本机数据')
         .height(48)
@@ -3493,6 +3590,39 @@ struct Index {
     .width('100%')
   }
   @Builder
+  private FloatingPanel() {
+    Column({ space: 10 }) {
+      Row() {
+        Column({ space: 5 }) {
+          Text('浮窗').fontSize(17).fontWeight(FontWeight.Bold).fontColor(INK)
+          Text(this.floatVisible ? '已开启' : '未开启').fontSize(13).fontColor(MUTED)
+        }.alignItems(HorizontalAlign.Start).layoutWeight(1)
+        Toggle({ type: ToggleType.Switch, isOn: this.floatVisible }).selectedColor(GREEN)
+          .enabled(!this.controlsLocked()).accessibilityText('坐姿浮窗')
+          .onChange((value: boolean) => { if (value !== this.floatVisible) { this.toggleFloatingWindow(); } })
+      }.width('100%')
+      if (this.floatMessage.length > 0) {
+        Text(this.floatMessage).fontSize(12).fontColor(MUTED).lineHeight(18).width('100%')
+      }
+      Text('离开应用后，相机检测暂停').fontSize(12).fontColor(MUTED).width('100%')
+    }.width('100%').padding(16).backgroundColor(GLASS).borderRadius(20)
+  }
+  @Builder
+  private QuickCalibrationPanel() {
+    Column({ space: 14 }) {
+      Row() {
+        Text('快速校准').fontSize(22).fontWeight(FontWeight.Bold).fontColor(INK).layoutWeight(1)
+        Text(this.calibrationProgressPercentText()).fontSize(24).fontWeight(FontWeight.Medium).fontColor(GREEN)
+      }.width('100%')
+      Text(this.calibrationProgressText).width('100%').fontSize(15).lineHeight(23).fontColor(INK)
+      Progress({ value: Math.max(0, this.calibrationProgressPercent), total: 100, type: ProgressType.Linear })
+        .width('100%').color(GREEN).backgroundColor('#DDE8E1').style({ strokeWidth: 6 })
+      Button(this.calibrationCancelled ? '正在取消' : '取消校准').height(36).fontSize(13).fontColor(MUTED)
+        .backgroundColor(GLASS_SOFT).enabled(!this.calibrationCancelled)
+        .onClick(() => { this.calibrationCancelled = true; })
+    }.width('100%').padding(20).constraintSize({ minHeight: 180 }).backgroundColor(GLASS).borderRadius(24)
+  }
+  @Builder
   private CalibrationPanel() {
     Column({ space: 12 }) {
       Text('校准')
@@ -3504,6 +3634,7 @@ struct Index {
         .fontSize(13)
         .fontColor(MUTED)
         .width('100%')
+      Text('每次开始守护时自动快速校准').fontSize(13).fontColor(MUTED).width('100%')
       if (this.calibrationProgressText.length > 0) {
         Column({ space: 8 }) {
           Row({ space: 8 }) {
@@ -3579,6 +3710,11 @@ struct Index {
           })
       }
       .width('100%')
+      if (this.isCalibrating) {
+        Button(this.calibrationCancelled ? '正在取消' : '取消校准').fontSize(13).fontColor(MUTED)
+          .height(36).backgroundColor(GLASS_SOFT).enabled(!this.calibrationCancelled)
+          .onClick(() => { this.calibrationCancelled = true; })
+      }
     }
     .width('100%')
     .padding(16)
@@ -3666,6 +3802,7 @@ struct Index {
         .fontColor(INK)
         .width('100%')
       this.SoundSwitchRow()
+      Divider().color(LINE_SOFT)
       this.VibrationSwitchRow()
       Divider().color(LINE_SOFT)
       Row({ space: 10 }) {
@@ -3675,6 +3812,8 @@ struct Index {
           Text('不保存照片或录像，不上传云端').fontSize(12).fontColor(MUTED)
         }.alignItems(HorizontalAlign.Start).layoutWeight(1)
       }.width('100%').padding({ top: 6, bottom: 6 })
+      Divider().color(LINE_SOFT)
+      Text('嘴部检测暂未启用，不计入综合分数').fontSize(12).fontColor(MUTED).width('100%')
     }
     .width('100%')
     .padding(16)
@@ -3738,7 +3877,7 @@ struct Index {
     Row() {
       Text('轻提示音')
         .fontSize(16)
-        .fontWeight(FontWeight.Bold)
+        .fontWeight(FontWeight.Regular)
         .fontColor(INK)
       Blank()
       Toggle({ type: ToggleType.Switch, isOn: this.settings.gentleSound })
@@ -3753,17 +3892,14 @@ struct Index {
     }
     .height(48)
     .width('100%')
-    .padding({ left: 12, right: 10 })
-    .backgroundColor(GLASS_SOFT)
-    .borderRadius(18)
-    .border({ width: 1, color: LINE_SOFT })
+    .padding({ right: 2 })
   }
   @Builder
   private VibrationSwitchRow() {
     Row() {
       Text('短振动')
         .fontSize(16)
-        .fontWeight(FontWeight.Bold)
+        .fontWeight(FontWeight.Regular)
         .fontColor(INK)
       Blank()
       Toggle({ type: ToggleType.Switch, isOn: this.settings.vibration })
@@ -3778,10 +3914,7 @@ struct Index {
     }
     .height(48)
     .width('100%')
-    .padding({ left: 12, right: 10 })
-    .backgroundColor(GLASS_SOFT)
-    .borderRadius(18)
-    .border({ width: 1, color: LINE_SOFT })
+    .padding({ right: 2 })
   }
   @Builder
   private DeveloperDebugPanel() {
@@ -3831,43 +3964,5 @@ struct Index {
     .width('100%')
     .padding(16)
     .border({ width: { top: 1 }, color: LINE_SOFT })
-  }
-  @Builder
-  private TabBar() {
-    Row({ space: 4 }) {
-      ForEach(TABS, (item: TabItem) => {
-        Button({ type: ButtonType.Normal }) {
-          Column({ space: 5 }) {
-            SymbolGlyph(item.icon)
-              .fontSize(23)
-              .fontColor([this.activeTab === item.index ? GREEN : '#939DA9'])
-            Text(item.label)
-              .fontSize(11)
-              .fontWeight(this.activeTab === item.index ? FontWeight.Bold : FontWeight.Regular)
-              .fontColor(this.activeTab === item.index ? GREEN_DEEP : MUTED)
-          }
-        }
-          .height(54)
-          .layoutWeight(1)
-          .backgroundColor(this.activeTab === item.index ? '#DCEFE5' : '#00000000')
-          .borderRadius(24)
-          .opacity(this.actionOpacity())
-          .enabled(!this.controlsLocked())
-          .accessibilityText(item.label + (this.activeTab === item.index ? '，已选择' : ''))
-          .onClick(() => {
-            this.switchTab(item.index);
-          })
-      }, (item: TabItem) => item.label)
-    }
-    .width('90%')
-    .constraintSize({ maxWidth: 560 })
-    .height(70)
-    .padding(8)
-    .margin({ bottom: 12, top: 4 })
-    .backgroundColor(GLASS)
-    .borderRadius(35)
-    .border({ width: 1, color: BORDER_GLASS })
-    .shadow({ radius: 20, color: SHADOW_BLUE, offsetY: 6 })
-    .attributeModifier(this.immersiveSurface)
   }
 }
