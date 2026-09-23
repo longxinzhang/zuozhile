@@ -120,6 +120,7 @@ export function buildCalibrationProfile(samples: PostureSample[], previous?: Cal
   const rollValues: number[] = [];
   const yawValues: number[] = [];
   const mouthValues: number[] = [];
+  const lipGapValues: number[] = [];
   const faceCenterYValues: number[] = [];
   const faceHeightValues: number[] = [];
   const faceAreaValues: number[] = [];
@@ -134,8 +135,15 @@ export function buildCalibrationProfile(samples: PostureSample[], previous?: Cal
       pitchValues.push(sample.face.pitch);
       rollValues.push(sample.face.roll);
       yawValues.push(sample.face.yaw);
-      if (sample.face.mouthAvailable !== false) {
+      if (sample.face.mouthAvailable !== false && sample.face.jawOpen === undefined) {
         mouthValues.push(sample.face.mouthOpenRatio);
+      }
+      const lipGap = sample.face.lipGapRatio;
+      if (sample.face.mouthAvailable === true && sample.face.confidence >= 0.8 &&
+        sample.face.jawOpen !== undefined && sample.face.jawOpen >= 0 &&
+        sample.face.jawOpen < 0.025 / Math.max(fallback.sensitivity, 0.6) &&
+        lipGap !== undefined && Number.isFinite(lipGap) && lipGap >= 0 && lipGap <= 1) {
+        lipGapValues.push(lipGap);
       }
       if (sample.face.rect) {
         faceCenterYValues.push(sample.face.rect.top + sample.face.rect.height / 2);
@@ -166,6 +174,8 @@ export function buildCalibrationProfile(samples: PostureSample[], previous?: Cal
     neutralRoll: median(rollValues, fallback.neutralRoll),
     neutralYaw: median(yawValues, fallback.neutralYaw),
     neutralMouthRatio: median(mouthValues, fallback.neutralMouthRatio),
+    neutralLipGapRatio: lipGapValues.length >= 3 &&
+      Math.max(...lipGapValues) - Math.min(...lipGapValues) <= 0.025 ? median(lipGapValues, 0) : undefined,
     neutralFaceCenterY: median(faceCenterYValues, fallback.neutralFaceCenterY),
     neutralFaceHeight: Math.max(1, median(faceHeightValues, fallback.neutralFaceHeight)),
     neutralFaceArea: Math.max(1, median(faceAreaValues, fallback.neutralFaceArea)),

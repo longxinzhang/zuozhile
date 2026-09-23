@@ -62,6 +62,9 @@ export interface FaceFrame {
   roll: number;
   mouthOpenRatio: number;
   mouthAvailable?: boolean;
+  jawOpen?: number;
+  lipGapRatio?: number;
+  mouthStatus?: string;
   confidence: number;
   rect?: FaceRect;
 }
@@ -79,6 +82,7 @@ export interface CalibrationProfile {
   neutralRoll: number;
   neutralYaw: number;
   neutralMouthRatio: number;
+  neutralLipGapRatio?: number;
   neutralFaceCenterY: number;
   neutralFaceHeight: number;
   neutralFaceArea: number;

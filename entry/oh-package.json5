@@ -6,5 +6,6 @@
   "author": "",
   "license": "",
   "dependencies": {
+    "libposture_ar.so": "file:./src/main/cpp/types/libposture_ar"
   }
 }

@@ -313,7 +313,34 @@ function evaluateChin(face: FaceFrame, skeleton: SkeletonFrame, profile: Calibra
 
 function evaluateMouth(face: FaceFrame, profile: CalibrationProfile): MetricResult {
   if (face.mouthAvailable === false) {
-    return makeMetric(PostureLevel.UNKNOWN, 0, profile.neutralMouthRatio, 0, '嘴部检测未启用');
+    return makeMetric(PostureLevel.UNKNOWN, 0, profile.neutralMouthRatio, 0,
+      face.mouthStatus ? face.mouthStatus : '嘴部检测不可用');
+  }
+  if (face.jawOpen !== undefined) {
+    const jaw = face.jawOpen;
+    if (!Number.isFinite(jaw) || jaw < 0 || jaw > 1 || face.confidence < 0.8 ||
+      Math.abs(face.yaw) > 35 || Math.abs(face.pitch) > 30) {
+      return makeMetric(PostureLevel.UNKNOWN, 0, 0, 0, '嘴部暂未可靠识别');
+    }
+    // Native expression intensity is not MAR: never subtract a legacy geometric baseline.
+    const gap = face.lipGapRatio;
+    const baselineGap = profile.neutralLipGapRatio;
+    if (gap === undefined || !Number.isFinite(gap) || gap < 0 || gap > 1) {
+      return makeMetric(PostureLevel.UNKNOWN, 0, 0, 0, '嘴唇间隙未可靠识别');
+    }
+    if (baselineGap === undefined || !Number.isFinite(baselineGap) || baselineGap < 0 || baselineGap > 1) {
+      return makeMetric(PostureLevel.UNKNOWN, 0, 0, 0, '请闭嘴重新校准');
+    }
+    const sensitivity = Math.max(profile.sensitivity, 0.6);
+    const pressure = Math.max(jaw / (0.025 / sensitivity),
+      Math.max(0, gap - baselineGap) / (0.015 / sensitivity));
+    const level = levelFromDelta(pressure, 1, 3);
+    const label = level === PostureLevel.BAD ? '请轻合嘴唇' :
+      (level === PostureLevel.WARN ? '轻微张口' : '嘴唇轻合');
+    const mouthScore = level === PostureLevel.GOOD ? 100 :
+      Math.max(20, 100 - Math.round(pressure * 15));
+    return makeMetric(level, gap, baselineGap, mouthScore, label,
+      level === PostureLevel.GOOD ? PostureAlertType.NONE : PostureAlertType.ITEM_11);
   }
   const sensitivity = Math.max(profile.sensitivity, 0.6);
   if (face.confidence < 0.25) {
@@ -356,7 +383,8 @@ export function evaluatePosture(sample: PostureSample, profile: CalibrationProfi
   const sit = evaluateSit(sample.skeleton, sample.face, profile);
   const chin = evaluateChin(sample.face, sample.skeleton, profile);
   const mouth = evaluateMouth(sample.face, profile);
-  const weightedScore = sample.face.mouthAvailable === false ?
+  const weightedScore = sample.face.mouthAvailable === false ||
+    (sample.face.jawOpen !== undefined && mouth.level === PostureLevel.UNKNOWN) ?
     (sit.score * 0.4 + chin.score * 0.45) / 0.85 :
     sit.score * 0.4 + chin.score * 0.45 + mouth.score * 0.15;
   const score = Math.round(clamp(weightedScore, 0, 100));

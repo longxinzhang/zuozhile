@@ -3,6 +3,7 @@ import { hilog } from '@kit.PerformanceAnalysisKit';
 import { window } from '@kit.ArkUI';
 import { PostureFloatService } from '../services/PostureFloatService';
 import { GuardWindowService } from '../services/GuardWindowService';
+import { supportsFaceTracking } from '../services/ARFaceCapability';
 
 const DOMAIN = 0x0000;
 const TAG = 'Zuozhile';
@@ -16,6 +17,7 @@ export default class EntryAbility extends UIAbility {
       hilog.warn(DOMAIN, TAG, 'Failed to set color mode: %{public}s', JSON.stringify(error));
     }
     hilog.info(DOMAIN, TAG, 'Ability onCreate');
+    hilog.info(DOMAIN, TAG, 'Face tracking supported: %{public}s', supportsFaceTracking().toString());
   }
 
   onDestroy(): void {

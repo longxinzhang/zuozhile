@@ -33,6 +33,8 @@ import { PostureFloatService } from '../services/PostureFloatService';
 import { ReminderFeedbackService } from '../services/ReminderFeedbackService';
 import { PostureSource } from '../services/PostureSource';
 import { CameraProbeResult, CameraProbeService } from '../services/CameraProbeService';
+import { supportsFaceTracking } from '../services/ARFaceCapability';
+import { ARPostureSource } from '../services/ARPostureSource';
 import {
   BLUE,
   APP_BG,
@@ -171,6 +173,7 @@ struct Index {
   @State private sitValue: number = 7;
   @State private chinValue: number = 0;
   @State private mouthValue: number = 0.16;
+  @State private mouthScore: number = 0;
   @State private reminderText: string = '暂无提醒';
   @State private reminderAction: ReminderAction = ReminderAction.NONE;
   @State private reminderAlertType: PostureAlertType = PostureAlertType.NONE;
@@ -305,6 +308,7 @@ struct Index {
         neutralRoll: settings.profile.neutralRoll,
         neutralYaw: settings.profile.neutralYaw,
         neutralMouthRatio: settings.profile.neutralMouthRatio,
+        neutralLipGapRatio: settings.profile.neutralLipGapRatio,
         neutralFaceCenterY: settings.profile.neutralFaceCenterY,
         neutralFaceHeight: settings.profile.neutralFaceHeight,
         neutralFaceArea: settings.profile.neutralFaceArea,
@@ -731,7 +735,7 @@ struct Index {
     if (useChin) {
       this.applyChinMetric(result.chin);
     }
-    if (useMouth) {
+    if (useMouth || this.lastSample?.face.jawOpen !== undefined) {
       this.applyMouthMetric(result.mouth);
     }
     this.summary = this.displaySummary();
@@ -767,6 +771,7 @@ struct Index {
     this.mouthLevel = metric.level;
     this.mouthLabel = metric.label;
     this.mouthValue = Math.round(metric.value * 100) / 100;
+    this.mouthScore = metric.score;
   }
   private appendRecord(result: PostureResult): void {
     const record: SessionRecord = {
@@ -887,6 +892,7 @@ struct Index {
     next.profile.neutralRoll = defaults.profile.neutralRoll;
     next.profile.neutralYaw = defaults.profile.neutralYaw;
     next.profile.neutralMouthRatio = defaults.profile.neutralMouthRatio;
+    next.profile.neutralLipGapRatio = undefined;
     next.profile.neutralFaceCenterY = defaults.profile.neutralFaceCenterY;
     next.profile.neutralFaceHeight = defaults.profile.neutralFaceHeight;
     next.profile.neutralFaceArea = defaults.profile.neutralFaceArea;
@@ -1099,6 +1105,9 @@ struct Index {
   private createPostureSource(): PostureSource {
     const context = this.abilityContext();
     if (this.settings.useCoreVision && context) {
+      if (supportsFaceTracking()) {
+        return new ARPostureSource(context, this.cameraPreviewSurfaceId);
+      }
       return new CoreVisionPostureSource(context, this.cameraPreviewSurfaceId);
     }
     return new MockPostureSource();
@@ -1376,7 +1385,7 @@ struct Index {
       return '身体坐回椅背，手可以前伸操作，但胸口别贴近屏幕。';
     }
     if (issue === PostureAlertType.ITEM_11) {
-      return '下颌放松、嘴唇自然闭合，保持轻松鼻呼吸。';
+      return '嘴唇自然轻合，不要咬紧；鼻塞或不适时不要强行闭嘴。';
     }
     if (issue === PostureAlertType.ITEM_12) {
       return '起身活动 1 分钟，再回来继续工作。';
@@ -1529,11 +1538,16 @@ struct Index {
       this.formatSignedNumber(face.roll, 1) + '°';
   }
   private debugMouthText(): string {
-    if (this.settings.useCoreVision) {
-      return '未启用：五点人脸模型不提供上下唇位置';
-    }
     if (!this.lastSample) {
       return '暂无';
+    }
+    if (this.lastSample.face.jawOpen !== undefined) {
+      return 'JAW_OPEN ' + this.lastSample.face.jawOpen.toFixed(3) + ' · ' +
+        '唇距 ' + this.lastSample.face.lipGapRatio?.toFixed(4) + ' · 基线 ' +
+        this.settings.profile.neutralLipGapRatio?.toFixed(4) + ' · ' + this.lastSample.face.mouthStatus;
+    }
+    if (this.lastSample.face.mouthAvailable === false) {
+      return '当前设备未提供可靠张口信号，不计分';
     }
     return (Math.round(this.lastSample.face.mouthOpenRatio * 100) / 100).toString();
   }
@@ -2250,16 +2264,16 @@ struct Index {
         PostureMetricTile({ title: '坐姿', status: '待识别', label: '肩颈与躯干', icon: this.guideCorrectResource(1) })
         PostureMetricTile({ title: '抬头', status: '待识别', color: BLUE, softColor: BLUE_SOFT,
           label: '未识别人脸', icon: this.guideCorrectResource(3) })
-        PostureMetricTile({ title: '嘴巴', status: this.settings.useCoreVision ? '未启用' : '待识别',
-          label: this.settings.useCoreVision ? '当前不计分' : '嘴部未识别', icon: this.guideCorrectResource(11) })
+        PostureMetricTile({ title: '嘴巴', status: '待识别',
+          label: '等待嘴部信号', icon: this.guideCorrectResource(11) })
       } else if (this.isFinishedUiState()) {
         PostureMetricTile({ title: '坐姿', status: '总结', color: GREEN, softColor: GREEN_SOFT, label: '报告已生成',
           value: this.sessionReportScore > 0 ? this.sessionReportScore.toString() + '分' : '--',
           icon: this.guideCorrectResource(1) })
         PostureMetricTile({ title: '抬头', status: '建议', color: GREEN, softColor: GREEN_SOFT,
           label: '查看统计', icon: this.guideCorrectResource(3) })
-        PostureMetricTile({ title: '嘴巴', status: this.settings.useCoreVision ? '未启用' : '完成',
-          label: this.settings.useCoreVision ? '当前不计分' : '建议已更新', icon: this.guideCorrectResource(11) })
+        PostureMetricTile({ title: '嘴巴', status: '完成',
+          label: '建议已更新', icon: this.guideCorrectResource(11) })
       } else {
         PostureMetricTile({ title: '坐姿', status: levelText(this.sitLevel), color: levelColor(this.sitLevel),
           softColor: levelSoftColor(this.sitLevel), label: this.sitLabel,
@@ -2269,11 +2283,10 @@ struct Index {
           softColor: levelSoftColor(this.chinLevel), label: this.chinLabel,
           value: this.chinLevel === PostureLevel.UNKNOWN ? '--' : this.chinValue.toString() + '°',
           icon: this.guideCorrectResource(3) })
-        PostureMetricTile({ title: '嘴巴', status: this.settings.useCoreVision ? '未启用' : levelText(this.mouthLevel),
-          color: this.settings.useCoreVision ? MUTED : levelColor(this.mouthLevel),
-          softColor: this.settings.useCoreVision ? GLASS_SOFT : levelSoftColor(this.mouthLevel),
-          label: this.settings.useCoreVision ? '当前不计分' : this.mouthLabel,
-          value: this.mouthLevel === PostureLevel.UNKNOWN ? '--' : this.mouthValue.toString(),
+        PostureMetricTile({ title: '嘴巴', status: levelText(this.mouthLevel),
+          color: levelColor(this.mouthLevel), softColor: levelSoftColor(this.mouthLevel),
+          label: this.mouthLabel,
+          value: this.mouthLevel === PostureLevel.UNKNOWN ? '--' : this.mouthScore.toString() + '分',
           icon: this.guideCorrectResource(11) })
       }
     }
@@ -2745,7 +2758,7 @@ struct Index {
       return '把屏幕垫高一点，减少反复低头。';
     }
     if (alert === PostureAlertType.ITEM_11) {
-      return '下颌放松，嘴唇自然闭合，鼻呼吸会更稳。';
+      return '嘴唇自然轻合，不要咬紧；鼻塞或不适时不要强行闭嘴。';
     }
     if (alert === PostureAlertType.ITEM_12) {
       return '深呼吸几次，顺便检查双脚是否平放在地面。';
@@ -3316,7 +3329,8 @@ struct Index {
       this.DebugParamCard('头部 roll 阈值', 'ROLL_HEAD_ONLY', 10, this.debugHigherThreshold(10), 5, 18, '°')
       this.DebugParamCard('身体靠前脸部倍率', 'FACE_EXPANSION', 1.18,
         1 + 0.18 / this.debugSensitivityScale(), 1.08, 1.35, '')
-      this.DebugParamCard('嘴巴张合增量', 'MAR_DELTA', 0.15, this.debugHigherThreshold(0.15), 0.05, 0.35, '')
+      this.DebugParamCard('原生张口强度', 'JAW_OPEN', 0.025, this.debugHigherThreshold(0.025), 0, 0.1, '')
+      this.DebugParamCard('上下唇间距增量', 'LIP_GAP_DELTA', 0.015, this.debugHigherThreshold(0.015), 0, 0.1, '')
     }
     .width('100%')
   }
@@ -3615,6 +3629,7 @@ struct Index {
         Text(this.calibrationProgressPercentText()).fontSize(24).fontWeight(FontWeight.Medium).fontColor(GREEN)
       }.width('100%')
       Text(this.calibrationProgressText).width('100%').fontSize(15).lineHeight(23).fontColor(INK)
+      Text('嘴唇自然轻合，肩膀放松').width('100%').fontSize(13).fontColor(MUTED)
       Progress({ value: Math.max(0, this.calibrationProgressPercent), total: 100, type: ProgressType.Linear })
         .width('100%').color(GREEN).backgroundColor('#DDE8E1').style({ strokeWidth: 6 })
       Button(this.calibrationCancelled ? '正在取消' : '取消校准').height(36).fontSize(13).fontColor(MUTED)
@@ -3635,6 +3650,7 @@ struct Index {
         .fontColor(MUTED)
         .width('100%')
       Text('每次开始守护时自动快速校准').fontSize(13).fontColor(MUTED).width('100%')
+      Text('校准时嘴唇自然轻合，肩膀放松').fontSize(13).fontColor(MUTED).width('100%')
       if (this.calibrationProgressText.length > 0) {
         Column({ space: 8 }) {
           Row({ space: 8 }) {
@@ -3813,7 +3829,7 @@ struct Index {
         }.alignItems(HorizontalAlign.Start).layoutWeight(1)
       }.width('100%').padding({ top: 6, bottom: 6 })
       Divider().color(LINE_SOFT)
-      Text('嘴部检测暂未启用，不计入综合分数').fontSize(12).fontColor(MUTED).width('100%')
+      Text('嘴部使用本机张口信号；未可靠识别时不计分').fontSize(12).fontColor(MUTED).width('100%')
     }
     .width('100%')
     .padding(16)

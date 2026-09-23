@@ -1,0 +1,10 @@
+cmake_minimum_required(VERSION 3.5.0)
+project(posture_ar)
+set(CMAKE_CXX_STANDARD 17)
+get_filename_component(SDK_ROOT "${CMAKE_SYSROOT}/../../.." ABSOLUTE)
+set(HMS_SYSROOT "${SDK_ROOT}/hms/native/sysroot")
+add_library(posture_ar SHARED posture_ar.cpp)
+target_include_directories(posture_ar PRIVATE "${HMS_SYSROOT}/usr/include")
+target_compile_options(posture_ar PRIVATE -Wall -Wextra -fexceptions)
+target_link_libraries(posture_ar PUBLIC libace_napi.z.so libEGL.so libGLESv2.so
+  "${HMS_SYSROOT}/usr/lib/aarch64-linux-ohos/libarengine_ndk.z.so")

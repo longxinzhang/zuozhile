@@ -40,6 +40,11 @@ export class CoreVisionPostureDetector {
   private skeletonDetector?: skeletonDetection.SkeletonDetector;
   private isFaceReady: boolean = false;
   private lastDetail: string = 'Core Vision 待检测';
+  private detectedFaceCount: number = 0;
+
+  faceCount(): number {
+    return this.detectedFaceCount;
+  }
 
   async prepare(): Promise<void> {
     if (!this.skeletonDetector) {
@@ -81,6 +86,7 @@ export class CoreVisionPostureDetector {
     }
     const skeletonCount = skeletonResponse.skeletons ? skeletonResponse.skeletons.length : 0;
     const faceCount = faces ? faces.length : 0;
+    this.detectedFaceCount = faceCount;
     const countDetail = '骨架 ' + skeletonCount.toString() + ' · 人脸 ' + faceCount.toString();
     this.lastDetail = skeletonWarning.length > 0 ?
       skeletonWarning + ' · 人脸检测完成 · ' + countDetail :

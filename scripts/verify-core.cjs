@@ -25,14 +25,17 @@ function source(file, previous) {
 
 const protectedFiles = [
   'models/ReminderEngine.ets', 'models/SessionStats.ets',
-  'services/CoreVisionPostureSource.ets', 'services/PostureSessionStore.ets'
+  'services/CoreVisionPostureSource.ets'
 ];
 for (const name of protectedFiles) {
   assert.equal(source(sourceRoot + name, false), source(sourceRoot + name, true), `${name} changed`);
 }
+assert.equal(source(sourceRoot + 'services/PostureSessionStore.ets', false).replace(
+  /    neutralLipGapRatio: profile\.neutralLipGapRatio !== undefined && Number\.isFinite\(profile\.neutralLipGapRatio\) &&\n      profile\.neutralLipGapRatio >= 0 && profile\.neutralLipGapRatio <= 1 \? profile\.neutralLipGapRatio : undefined,\n/, ''),
+  source(sourceRoot + 'services/PostureSessionStore.ets', true), 'Only the optional lip baseline storage field may change');
 
 // Explicitly authorized changes: automatic calibration, lifecycle cleanup, unavailable mouth data.
-const protectedMethods = ['captureFrame', 'applyResult', 'appendRecord',
+const protectedMethods = ['captureFrame', 'appendRecord',
   'shouldAdoptMetric', 'setSensitivity', 'setIntervalMs', 'buildSessionReport'];
 function pageMethod(previous, name) {
   const text = source(sourceRoot + 'pages/Index.ets', previous).replace('struct Index {', 'class Index {');
@@ -45,6 +48,9 @@ function pageMethod(previous, name) {
 for (const name of protectedMethods) {
   assert.equal(pageMethod(false, name), pageMethod(true, name), `${name} changed`);
 }
+assert.equal(pageMethod(false, 'applyResult').replace(
+  'if (useMouth || this.lastSample?.face.jawOpen !== undefined)', 'if (useMouth)'),
+  pageMethod(true, 'applyResult'), 'Only native mouth display may bypass frame-count debounce');
 function declarations(file, previous) {
   const tree = ts.createSourceFile(file, source(sourceRoot + file, previous), ts.ScriptTarget.Latest, true);
   return new Map(tree.statements.filter(ts.isFunctionDeclaration).map(node => [node.name.text, node.getText(tree)]));
@@ -167,6 +173,107 @@ const detector = source(sourceRoot + 'services/CoreVisionPostureDetector.ets', f
 assert.ok(!detector.includes('estimateMouthRatio'));
 assert.equal((detector.match(/mouthAvailable: false/g) || []).length, 3);
 console.log('PASS: unavailable mouth is explicit, excluded from score and baseline; sit/chin rules unchanged');
+
+for (const sensitivity of [0.9, 1.2]) {
+  const profile = { ...types.createDefaultCalibration(), sensitivity, neutralLipGapRatio: .08 };
+  let previous = 101;
+  for (let i = 0; i <= 100; i++) {
+    const sample = generate(0, profile);
+    sample.face = { ...sample.face, confidence: 0.99, yaw: 0, pitch: 0, jawOpen: i / 100,
+      lipGapRatio: .08, mouthAvailable: true };
+    const result = newEvaluate(sample, profile);
+    assert.ok(result.mouth.score <= previous);
+    previous = result.mouth.score;
+    if (i / 100 > .025 / sensitivity) {
+      assert.ok(result.mouth.score < 100, 'Even slight measured opening must reduce mouth score');
+      assert.notEqual(result.mouth.level, types.PostureLevel.GOOD);
+    } else {
+      assert.equal(result.mouth.score, 100, 'Noise floor must not penalize closed lips');
+    }
+    const legacy = oldEvaluate(sample, profile);
+    assert.deepEqual(normalize(result.sit), normalize(legacy.sit));
+    assert.deepEqual(normalize(result.chin), normalize(legacy.chin));
+    assert.equal(newEvaluate(sample, { ...profile, neutralMouthRatio: 0.95 }).mouth.level, result.mouth.level,
+      'Native jaw intensity cannot use the obsolete MAR baseline');
+    assert.equal(result.score, Math.round(result.sit.score * .4 + result.chin.score * .45 + result.mouth.score * .15));
+  }
+  for (const patch of [{ jawOpen: NaN }, { jawOpen: Infinity }, { jawOpen: -1 }, { jawOpen: 1.01 },
+    { confidence: .79 }, { yaw: 36 }, { pitch: -31 }, { mouthAvailable: false },
+    { lipGapRatio: undefined }, { lipGapRatio: NaN }, { lipGapRatio: Infinity },
+    { lipGapRatio: -1 }, { lipGapRatio: 1.01 }]) {
+    const sample = generate(0, profile);
+    sample.face = { ...sample.face, confidence: .99, yaw: 0, pitch: 0, jawOpen: .9,
+      lipGapRatio: .08, mouthAvailable: true, ...patch };
+    const result = newEvaluate(sample, profile);
+    assert.equal(result.mouth.level, types.PostureLevel.UNKNOWN);
+    assert.equal(result.mouth.alertType, types.PostureAlertType.NONE);
+    assert.equal(result.score, Math.round((result.sit.score * .4 + result.chin.score * .45) / .85));
+  }
+  const nativeSamples = Array.from({ length: 5 }, () => {
+    const sample = generate(0, profile);
+    sample.face.jawOpen = .05;
+    sample.face.mouthOpenRatio = 0;
+    return sample;
+  });
+  assert.equal(after('models/PostureCalibration').buildCalibrationProfile(nativeSamples, profile).neutralMouthRatio,
+    profile.neutralMouthRatio);
+  const slight = generate(0, profile);
+  slight.face = { ...slight.face, confidence: .99, yaw: 0, pitch: 0, jawOpen: 0,
+    lipGapRatio: .10, mouthAvailable: true };
+  assert.notEqual(newEvaluate(slight, profile).mouth.level, types.PostureLevel.GOOD,
+    'Separated lips must count even when the native jaw expression is zero');
+  assert.ok(newEvaluate(slight, profile).mouth.score < 100);
+  slight.face.lipGapRatio = .08;
+  assert.equal(newEvaluate(slight, profile).mouth.level, types.PostureLevel.GOOD);
+  assert.equal(newEvaluate(slight, { ...profile, neutralLipGapRatio: undefined }).mouth.level,
+    types.PostureLevel.UNKNOWN, 'Missing lip baseline must not report closed lips');
+  for (const invalid of [NaN, Infinity, -1, 1.01]) {
+    assert.equal(newEvaluate(slight, { ...profile, neutralLipGapRatio: invalid }).mouth.level,
+      types.PostureLevel.UNKNOWN, 'Invalid lip baseline must not contribute a score');
+  }
+  const closed = Array.from({ length: 5 }, () => normalize(slight));
+  assert.equal(after('models/PostureCalibration').buildCalibrationProfile(closed, profile).neutralLipGapRatio, .08);
+  closed[2].face.lipGapRatio = .15;
+  assert.equal(after('models/PostureCalibration').buildCalibrationProfile(closed, profile).neutralLipGapRatio, undefined,
+    'Unstable lip calibration must not preserve a stale baseline');
+}
+console.log('PASS: native jaw/lip scoring, baseline stability, invalid input rejection and MAR isolation');
+
+// Rounded scalar diagnostics from 2026-09-23, not an accuracy dataset or UI recording.
+const traceProfile = { ...types.createDefaultCalibration(), sensitivity: 1.2, neutralLipGapRatio: .0048 };
+const trace = [.0035, .0051, .0587, .0519, .0620, .0625, .0555, .0542, .0053, .0057, .0058];
+const traceScores = trace.map((gap) => {
+  const sample = generate(0, traceProfile);
+  sample.face = { ...sample.face, confidence: .99, yaw: 0, pitch: 0, jawOpen: 0,
+    lipGapRatio: gap, mouthAvailable: true };
+  return newEvaluate(sample, traceProfile).mouth.score;
+});
+assert.deepEqual(traceScores, [100, 100, 35, 43, 31, 31, 39, 41, 100, 100, 100]);
+console.log('PASS: real lip-gap diagnostic replay gives mouth scores ' + traceScores.join(', '));
+
+const mouthDisplay = vm.runInNewContext(ts.transpileModule(`class MouthDisplay {
+  ${['applyResult', 'applyMouthMetric'].map(name => pageMethod(false, name)).join('\n')}
+} new MouthDisplay();`, { compilerOptions: { target: ts.ScriptTarget.ES2020 } }).outputText, {
+  PostureLevel: types.PostureLevel, PostureAlertType: types.PostureAlertType,
+  ReminderAction: types.ReminderAction, DisplayMetricType: { SIT: 'sit', CHIN: 'chin', MOUTH: 'mouth' },
+  actionLabel: () => ''
+});
+Object.assign(mouthDisplay, { shouldAdoptMetric: () => false, metricKey: () => '',
+  sitAlertType: () => types.PostureAlertType.NONE, chinAlertType: () => types.PostureAlertType.NONE,
+  displaySummary: () => '', clearReminderDisplay: () => {}, formatClock: () => '',
+  reminderAction: types.ReminderAction.NONE, reminderAlertType: types.PostureAlertType.NONE });
+for (const gap of [.06, .005]) {
+  const sample = generate(0, traceProfile);
+  sample.face = { ...sample.face, confidence: .99, yaw: 0, pitch: 0, jawOpen: 0,
+    lipGapRatio: gap, mouthAvailable: true };
+  mouthDisplay.lastSample = sample;
+  const result = newEvaluate(sample, traceProfile);
+  mouthDisplay.applyResult(result);
+  assert.equal(mouthDisplay.mouthScore, result.mouth.score);
+  assert.equal(mouthDisplay.mouthLevel, result.mouth.level);
+  assert.equal(mouthDisplay.score, result.score);
+}
+console.log('PASS: actual page methods apply native mouth score and total in the same frame, including recovery');
 
 // Exercise display-only states separately from the unchanged detection rules.
 assert.match(pageMethod(false, 'lastSample'), /^@State\s+@Watch\('syncFloatingState'\)\s+private lastSample/,

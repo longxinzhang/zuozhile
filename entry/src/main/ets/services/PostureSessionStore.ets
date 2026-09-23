@@ -69,6 +69,8 @@ function sanitizeProfile(profile: CalibrationProfile): CalibrationProfile {
     neutralRoll: numberOr(profile.neutralRoll, defaults.neutralRoll, -45, 45),
     neutralYaw: numberOr(profile.neutralYaw, defaults.neutralYaw, -45, 45),
     neutralMouthRatio: numberOr(profile.neutralMouthRatio, defaults.neutralMouthRatio, 0, 0.8),
+    neutralLipGapRatio: profile.neutralLipGapRatio !== undefined && Number.isFinite(profile.neutralLipGapRatio) &&
+      profile.neutralLipGapRatio >= 0 && profile.neutralLipGapRatio <= 1 ? profile.neutralLipGapRatio : undefined,
     neutralFaceCenterY: numberOr(profile.neutralFaceCenterY, defaults.neutralFaceCenterY, 0, 10000),
     neutralFaceHeight: numberOr(profile.neutralFaceHeight, defaults.neutralFaceHeight, 1, 10000),
     neutralFaceArea: numberOr(profile.neutralFaceArea, defaults.neutralFaceArea, 1, 100000000),
