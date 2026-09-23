@@ -4,6 +4,7 @@ import { window } from '@kit.ArkUI';
 import { PostureFloatService } from '../services/PostureFloatService';
 import { GuardWindowService } from '../services/GuardWindowService';
 import { supportsFaceTracking } from '../services/ARFaceCapability';
+import { APP_BG, INK } from '../theme/ZuozhiTheme';
 
 const DOMAIN = 0x0000;
 const TAG = 'Zuozhile';
@@ -30,8 +31,8 @@ export default class EntryAbility extends UIAbility {
       const mainWindow = windowStage.getMainWindowSync();
       GuardWindowService.setMainWindow(mainWindow);
       mainWindow.setWindowSystemBarProperties({
-        statusBarColor: '#F2F3F5', navigationBarColor: '#F2F3F5',
-        statusBarContentColor: '#20252D', navigationBarContentColor: '#20252D'
+        statusBarColor: APP_BG, navigationBarColor: APP_BG,
+        statusBarContentColor: INK, navigationBarContentColor: INK
       }).catch(() => {});
     } catch (error) {
       hilog.warn(DOMAIN, TAG, 'Main window appearance unavailable');

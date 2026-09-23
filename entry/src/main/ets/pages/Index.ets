@@ -35,6 +35,7 @@ import { PostureSource } from '../services/PostureSource';
 import { CameraProbeResult, CameraProbeService } from '../services/CameraProbeService';
 import { supportsFaceTracking } from '../services/ARFaceCapability';
 import { ARPostureSource } from '../services/ARPostureSource';
+import { HarmonyTabBar, ImmersiveSurface, navigationBottomInset, navigationTitleOptions } from '../theme/ImmersiveSurface';
 import {
   BLUE,
   APP_BG,
@@ -167,9 +168,9 @@ struct Index {
   @State private sitLevel: PostureLevel = PostureLevel.GOOD;
   @State private chinLevel: PostureLevel = PostureLevel.GOOD;
   @State private mouthLevel: PostureLevel = PostureLevel.GOOD;
-  @State private sitLabel: string = '肩颈稳定';
-  @State private chinLabel: string = '下巴高度正常';
-  @State private mouthLabel: string = '嘴部放松';
+  @State @Watch('syncFloatingState') private sitLabel: string = '肩颈稳定';
+  @State @Watch('syncFloatingState') private chinLabel: string = '下巴高度正常';
+  @State @Watch('syncFloatingState') private mouthLabel: string = '嘴部放松';
   @State private sitValue: number = 7;
   @State private chinValue: number = 0;
   @State private mouthValue: number = 0.16;
@@ -188,6 +189,9 @@ struct Index {
   @StorageLink('appForeground') @Watch('onForegroundChanged') private appForeground: boolean = true;
   @StorageProp('floatVisible') private floatVisible: boolean = false;
   @StorageProp('floatMessage') private floatMessage: string = '';
+  @StorageProp('floatBusy') private floatBusy: boolean = false;
+  @StorageProp('floatCapability') private floatCapability: string = '';
+  @State private showSettingsTip: boolean = false;
   @State private isCalibrationProgressHealthy: boolean = true;
   @State private calibrationProgressPercent: number = -1;
   @State private lastSampleText: string = '尚未采样';
@@ -254,10 +258,16 @@ struct Index {
     AppStorage.setOrCreate('floatSummary', this.summary);
     AppStorage.setOrCreate('floatGuarding', this.isGuarding);
     AppStorage.setOrCreate('floatSimulated', !this.settings.useCoreVision);
+    AppStorage.setOrCreate('floatSitLabel', this.sitLabel);
+    AppStorage.setOrCreate('floatChinLabel', this.chinLabel);
+    AppStorage.setOrCreate('floatMouthLabel', this.mouthLabel);
     AppStorage.setOrCreate('floatTimestamp', this.hasCurrentReading() && !this.isDetectionErrorUiState() &&
       !this.isUnrecognizedUiState() && this.lastSample ? this.lastSample.timestamp : 0);
   }
   private async toggleFloatingWindow(): Promise<void> {
+    if (this.floatBusy || this.controlsLocked()) {
+      return;
+    }
     this.syncFloatingState();
     if (this.floatVisible) {
       await PostureFloatService.close();
@@ -1810,7 +1820,7 @@ struct Index {
     if (issues.length === 0) {
       return '今天整体稳定，继续保持当前坐姿节奏。';
     }
-    return '今天最明显的问题是' + alertTypeLabel(issues[0].type) + '，建议优先调整桌椅和屏幕位置。';
+    return '今日重点：' + alertTypeLabel(issues[0].type) + '。';
   }
   build() {
     if (!this.loaded) {
@@ -1821,18 +1831,23 @@ struct Index {
         if (this.settings.useCoreVision) {
           this.CameraSurfaceHost()
         }
-        Tabs({ barPosition: BarPosition.End, index: this.activeTab }) {
-          ForEach(TABS, (item: TabItem) => {
-            TabContent() {
-              this.PageBody(item.index)
-            }.tabBar(BottomTabBarStyle.of({ normal: new SymbolGlyphModifier(item.icon).fontColor([MUTED]),
-              selected: new SymbolGlyphModifier(item.icon).fontColor([GREEN]) }, item.label)
-              .labelStyle({ selectedColor: GREEN, unselectedColor: MUTED, font: { size: 11 } }))
-          }, (item: TabItem) => item.label)
-        }
-        .width('100%').height('100%').barHeight(64).scrollable(false).animationDuration(180)
-        .onContentWillChange(() => !this.controlsLocked())
-        .onChange((index: number) => { this.switchTab(index); })
+        Navigation() {
+          Tabs({ barPosition: BarPosition.End, index: this.activeTab }) {
+            ForEach(TABS, (item: TabItem) => {
+              TabContent() {
+                this.PageBody(item.index)
+              }.tabBar(BottomTabBarStyle.of({ normal: new SymbolGlyphModifier(item.icon).fontColor([MUTED]),
+                selected: new SymbolGlyphModifier(item.icon).fontColor([GREEN]) }, item.label)
+                .labelStyle({ selectedColor: GREEN, unselectedColor: MUTED, font: { size: 11 } }))
+            }, (item: TabItem) => item.label)
+          }
+          .width('100%').height('100%').barHeight(60).scrollable(false).animationDuration(220)
+          .attributeModifier(new HarmonyTabBar())
+          .onContentWillChange(() => !this.controlsLocked())
+          .onChange((index: number) => { this.switchTab(index); })
+        }.width('100%').height('100%').mode(NavigationMode.Stack)
+          .title({ builder: this.Header(), height: 72 }, navigationTitleOptions())
+          .hideBackButton(true).hideToolBar(true).backgroundColor(APP_BG)
         if (this.showHardReminder) {
           this.HardReminderOverlay()
         }
@@ -1879,7 +1894,6 @@ struct Index {
   private PageBody(index: number) {
     Scroll(this.pageScrollers[index]) {
       Column({ space: 16 }) {
-        this.Header()
         if (index === 0) {
           this.GuardPage()
         } else if (index === 1) {
@@ -1894,10 +1908,10 @@ struct Index {
       }
       .width('100%')
       .constraintSize({ maxWidth: 600 })
-      .padding({ left: 20, right: 20, top: 18, bottom: 20 })
+      .padding({ left: 20, right: 20, top: 12, bottom: navigationBottomInset() })
     }
     .width('100%')
-    .layoutWeight(1)
+    .height('100%')
     .align(Alignment.Top)
     .scrollBar(BarState.Off)
   }
@@ -1905,42 +1919,39 @@ struct Index {
   private Header() {
     Row({ space: 12 }) {
       if (this.activeTab === 0) {
-        Image($r('app.media.brand_mark')).width(44).height(44).borderRadius(12)
+        Image($r('app.media.brand_mark')).width(36).height(36).borderRadius(10)
       }
-      Column({ space: 7 }) {
+      Column({ space: 3 }) {
         Text(this.activeTab === 0 ? '坐直了' : TABS[this.activeTab].label)
-          .fontSize(28)
+          .fontSize(24)
           .fontWeight(FontWeight.Bold)
           .fontColor(INK)
-        Row({ space: 6 }) {
-          SymbolGlyph($r('sys.symbol.checkmark_shield_fill'))
-            .fontSize(14)
-            .fontColor([this.headerStatusColor()])
-          Text(this.settings.useCoreVision ? this.headerStatusText() : '模拟预览 · 非真实检测')
-            .fontSize(12)
-            .fontColor(this.headerStatusColor())
+        if (this.activeTab === 0 || !this.settings.useCoreVision) {
+          Row({ space: 5 }) {
+            SymbolGlyph($r('sys.symbol.checkmark_shield_fill'))
+              .fontSize(12).fontColor([this.headerStatusColor()])
+            Text(this.settings.useCoreVision ? this.headerStatusText() : '模拟预览 · 非真实检测')
+              .fontSize(11).fontColor(this.headerStatusColor()).maxLines(1)
+          }
         }
       }
       .alignItems(HorizontalAlign.Start)
       .layoutWeight(1)
       if (this.activeTab === 0) {
-        Row({ space: 8 }) {
-          Text(this.headerSwitchText())
-            .fontSize(12)
-            .fontColor(this.headerStatusColor())
-          SymbolGlyph(this.isGuarding && !this.isDetectionErrorUiState() ?
-            $r('sys.symbol.camera_fill') : $r('sys.symbol.camera_slash_fill'))
-            .fontSize(18)
-            .fontColor([this.headerStatusColor()])
-        }
-        .padding({ left: 12, right: 10, top: 10, bottom: 10 })
-        .backgroundColor(GLASS)
-        .borderRadius(24)
-        .border({ width: 1, color: BORDER_GLASS })
-        .shadow({ radius: 14, color: SHADOW_CARD, offsetY: 5 })
+        Button({ type: ButtonType.Circle }) {
+          SymbolGlyph($r('sys.symbol.gearshape_fill')).fontSize(19).fontColor([INK])
+        }.width(40).height(40).backgroundColor(GLASS)
+          .attributeModifier(new ImmersiveSurface())
+          .accessibilityText('打开设置')
+          .bindPopup(this.showSettingsTip, { message: '设置' })
+          .onHover((hovered: boolean) => { this.showSettingsTip = hovered; })
+          .enabled(!this.controlsLocked())
+          .onClick(() => { this.switchTab(3); })
       }
     }
     .width('100%')
+    .height('100%')
+    .padding({ left: 20, right: 20 })
   }
   @Builder
   private GuardPage() {
@@ -1958,61 +1969,33 @@ struct Index {
   }
   @Builder
   private ScorePanel() {
-    Column({ space: 14 }) {
-      Row({ space: 12 }) {
-        Column({ space: 8 }) {
-          SymbolGlyph($r('sys.symbol.checkmark_shield_fill'))
-            .fontSize(26)
+    Row({ space: 14 }) {
+      Column({ space: 10 }) {
+        Row({ space: 6 }) {
+          SymbolGlyph($r('sys.symbol.checkmark_shield_fill')).fontSize(16)
             .fontColor([this.isIdleUiState() ? GREEN : this.heroScoreColor()])
-          Text(this.heroTitleText())
-            .fontSize(22)
-            .fontWeight(FontWeight.Bold)
-            .fontColor(INK)
-            .maxLines(2)
-          Text(this.heroDetailText())
-            .fontSize(12)
-            .fontColor(MUTED)
-            .lineHeight(18)
-            .maxLines(2)
-        }
-        .layoutWeight(1)
-        .alignItems(HorizontalAlign.Start)
+          Text(this.heroStatusLabel()).fontSize(11).fontColor(this.isIdleUiState() ? MUTED : this.heroScoreColor())
+            .maxLines(2).layoutWeight(1)
+        }.width('100%')
+        Text(this.heroTitleText()).fontSize(19).fontWeight(FontWeight.Bold).fontColor(INK).maxLines(2)
+          .minFontSize(16).maxFontSize(19)
+        Text(this.heroDetailText()).fontSize(12).fontColor(MUTED).lineHeight(18).maxLines(2)
+      }.layoutWeight(1).alignItems(HorizontalAlign.Start)
+      Stack() {
+        Progress({ value: this.heroProgressValue(), total: 100, type: ProgressType.Ring })
+          .width(108).height(108).color(this.heroScoreColor()).backgroundColor('#DCE9E4')
+          .style({ strokeWidth: 5 })
         Column({ space: 0 }) {
-          Text(this.heroScoreText())
-            .fontSize(64)
-            .fontWeight(FontWeight.Bold)
-            .fontColor(this.heroScoreColor())
-            .maxLines(1)
-            .minFontSize(44)
-            .maxFontSize(64)
-          Text('综合评分')
-            .fontSize(12)
-            .fontColor(MUTED)
-        }
-        .width(106)
-      }
-      .width('100%')
-      Row({ space: 10 }) {
-        Progress({ value: this.heroProgressValue(), total: 100, type: ProgressType.Linear })
-          .layoutWeight(1)
-          .color(this.heroScoreColor())
-          .backgroundColor('#DFEBE5')
-          .style({ strokeWidth: 6 })
-        Text(this.heroStatusLabel())
-          .fontSize(11)
-          .fontColor(this.isIdleUiState() ? MUTED : this.heroScoreColor())
-          .constraintSize({ maxWidth: 100 })
-          .maxLines(2)
-      }
-      .width('100%')
+          Text(this.heroScoreText()).fontSize(44).fontWeight(FontWeight.Bold).fontColor(this.heroScoreColor())
+            .maxLines(1).minFontSize(34).maxFontSize(44)
+          Text('综合评分').fontSize(10).fontColor(MUTED)
+        }.width(88)
+      }.width(108).height(108)
     }
-    .width('100%')
-    .padding(20)
-    .constraintSize({ minHeight: 180 })
-    .linearGradient({ angle: 120, colors: [['#FAFCFE', 0], ['#E6F5EE', 1]] })
-    .borderRadius(26)
-    .border({ width: 1, color: BORDER_GLASS })
-    .shadow({ radius: 20, color: SHADOW_GREEN, offsetY: 8 })
+    .width('100%').padding(20).constraintSize({ minHeight: 150 })
+    .linearGradient({ angle: 110, colors: [['#FFFFFF', 0], ['#EEF8F3', 0.65], ['#E8F2FA', 1]] })
+    .borderRadius(26).border({ width: 1, color: BORDER_GLASS })
+    .shadow({ radius: 12, color: '#08138654', offsetY: 4 })
   }
   @Builder
   private HardReminderOverlay() {
@@ -2309,8 +2292,9 @@ struct Index {
         .height(54)
         .width('100%')
         .backgroundColor(this.guardButtonColor())
+        .attributeModifier(new ImmersiveSurface(this.isGuarding ? '#D9E85549' : '#D9138654'))
         .borderRadius(27)
-        .shadow({ radius: 14, color: (this.isGuarding || this.isStoppingGuard) ? SHADOW_CORAL : SHADOW_GREEN, offsetY: 6 })
+        .shadow({ radius: 10, color: (this.isGuarding || this.isStoppingGuard) ? SHADOW_CORAL : SHADOW_GREEN, offsetY: 3 })
         .opacity(this.actionOpacity())
         .enabled(!this.controlsLocked())
         .accessibilityText(this.guardButtonText())
@@ -2427,37 +2411,13 @@ struct Index {
   @Builder
   private IdleHintCard() {
     Row({ space: 14 }) {
-      Stack() {
-        Image(this.guideCorrectResource(1))
-          .width('86%')
-          .height('86%')
-          .objectFit(ImageFit.Contain)
-      }
-      .width(84)
-      .height(92)
-      .backgroundColor(GLASS_GREEN)
-      .borderRadius(20)
+      Image(this.guideCorrectResource(1)).width(78).height(94).objectFit(ImageFit.Contain)
       Column({ space: 8 }) {
-        Row({ space: 8 }) {
-          Text('建议')
-            .width(44)
-            .height(26)
-            .fontSize(12)
-            .fontWeight(FontWeight.Bold)
-            .fontColor(GREEN_DEEP)
-            .textAlign(TextAlign.Center)
-            .lineHeight(26)
-            .backgroundColor(GREEN_SOFT)
-            .borderRadius(13)
-          Text(this.isUnrecognizedUiState() ? '请保持上半身入镜' : '坐稳，肩膀放松')
-            .fontSize(18)
-            .fontWeight(FontWeight.Bold)
-            .fontColor(INK)
-            .maxLines(2)
-            .layoutWeight(1)
-        }
+        Text('姿态建议').fontSize(11).fontColor(GREEN_DEEP)
+        Text(this.isUnrecognizedUiState() ? '请保持上半身入镜' : '坐稳，肩膀放松')
+          .fontSize(17).fontWeight(FontWeight.Medium).fontColor(INK).maxLines(2)
         Text('腰背自然舒展，双脚平放地面。让人脸和双肩保持在摄像头视野内。')
-          .fontSize(14)
+          .fontSize(13)
           .fontColor(MUTED)
           .lineHeight(20)
           .maxLines(3)
@@ -2467,11 +2427,8 @@ struct Index {
     }
     .constraintSize({ minHeight: 124 })
     .width('100%')
-    .padding(12)
-    .backgroundColor(GLASS)
-    .borderRadius(24)
-    .border({ width: 1, color: BORDER_GLASS })
-    .shadow({ radius: 18, color: SHADOW_CARD, offsetY: 8 })
+    .padding({ top: 14, bottom: 14 })
+    .border({ width: { bottom: 1 }, color: LINE_SOFT })
   }
   @Builder
   private PostureInsightCard() {
@@ -2807,7 +2764,7 @@ struct Index {
   }
   @Builder
   private StatsPage() {
-    Column({ space: 14 }) {
+    Column({ space: 0 }) {
       this.TodaySummary()
       this.AlertBreakdownPanel()
       this.HourChart()
@@ -2817,10 +2774,10 @@ struct Index {
   }
   @Builder
   private TodaySummary() {
-    Column({ space: 12 }) {
+    Column({ space: 10 }) {
       Row() {
         Text('今日概览')
-          .fontSize(17)
+          .fontSize(16)
           .fontWeight(FontWeight.Bold)
           .fontColor(INK)
         Blank()
@@ -2830,10 +2787,10 @@ struct Index {
       }
       .width('100%')
       Row({ space: 10 }) {
-        StatTile({ label: '均分', value: this.todayStats().sampleCount > 0 ? this.todayStats().averageScore.toString() : '--',
+        StatTile({ label: '今日均分', value: this.todayStats().sampleCount > 0 ? this.todayStats().averageScore.toString() : '--',
           color: this.todayStats().sampleCount > 0 ? scoreColor(this.todayStats().averageScore) : MUTED })
-        StatTile({ label: '端正', value: this.todayStats().uprightMinutes.toString() + '分', color: GREEN })
-        StatTile({ label: '提醒', value: this.todayStats().remindCount.toString(), color: RED })
+        StatTile({ label: '端正时长', value: this.todayStats().uprightMinutes.toString() + '分', color: BLUE })
+        StatTile({ label: '提醒次数', value: this.todayStats().remindCount.toString(), color: INK })
       }
       .width('100%')
       Row({ space: 10 }) {
@@ -2843,19 +2800,15 @@ struct Index {
       }
       .width('100%')
       Text(this.todayInsightText())
-        .fontSize(14)
+        .fontSize(13)
         .fontColor(MUTED)
         .lineHeight(20)
         .width('100%')
-        .padding({ left: 12, right: 12, top: 10, bottom: 10 })
-        .border({ width: { top: 1 }, color: LINE_SOFT })
+        .padding({ top: 4, bottom: 4 })
     }
     .width('100%')
-    .padding(16)
-    .backgroundColor(GLASS)
-    .borderRadius(24)
-    .border({ width: 1, color: BORDER_GLASS })
-    .shadow({ radius: 18, color: SHADOW_CARD, offsetY: 8 })
+    .padding({ top: 4, bottom: 20 })
+    .border({ width: { bottom: 1 }, color: LINE_SOFT })
   }
   @Builder
   private AlertBreakdownPanel() {
@@ -2906,16 +2859,13 @@ struct Index {
             .borderRadius(4)
           }
           .width('100%')
-          .padding({ left: 10, right: 10, top: 10, bottom: 10 })
+          .padding({ top: 6, bottom: 6 })
         }, (item: AlertBreakdownItem) => item.type)
       }
     }
     .width('100%')
-    .padding(16)
-    .backgroundColor(GLASS)
-    .borderRadius(24)
-    .border({ width: 1, color: BORDER_GLASS })
-    .shadow({ radius: 18, color: SHADOW_CARD, offsetY: 8 })
+    .padding({ top: 16, bottom: 20 })
+    .border({ width: { bottom: 1 }, color: LINE_SOFT })
   }
   @Builder
   private HourChart() {
@@ -2958,11 +2908,8 @@ struct Index {
       .width('100%')
     }
     .width('100%')
-    .padding(16)
-    .backgroundColor(GLASS)
-    .borderRadius(24)
-    .border({ width: 1, color: BORDER_GLASS })
-    .shadow({ radius: 18, color: SHADOW_CARD, offsetY: 8 })
+    .padding({ top: 16, bottom: 20 })
+    .border({ width: { bottom: 1 }, color: LINE_SOFT })
   }
   @Builder
   private RecentList() {
@@ -3009,11 +2956,8 @@ struct Index {
       }
     }
     .width('100%')
-    .padding(16)
-    .backgroundColor(GLASS)
-    .borderRadius(24)
-    .border({ width: 1, color: BORDER_GLASS })
-    .shadow({ radius: 18, color: SHADOW_CARD, offsetY: 8 })
+    .padding({ top: 16, bottom: 20 })
+    .border({ width: { bottom: 1 }, color: LINE_SOFT })
   }
   @Builder
   private DebugPage() {
@@ -3502,9 +3446,9 @@ struct Index {
     Column({ space: 12 }) {
       Row() {
         Text('日常姿态练习')
-          .fontSize(17)
-          .fontWeight(FontWeight.Bold)
-          .fontColor(INK)
+          .fontSize(15)
+          .fontWeight(FontWeight.Medium)
+          .fontColor(MUTED)
         Blank()
         Text('12 项')
           .fontSize(13)
@@ -3519,87 +3463,66 @@ struct Index {
   }
   @Builder
   private GuideCard(item: PostureGuideItem) {
-    Column({ space: 12 }) {
+    Column({ space: 8 }) {
       Row({ space: 10 }) {
         Text(item.id.toString())
-          .width(30)
-          .height(30)
-          .fontSize(16)
+          .width(24)
+          .fontSize(13)
           .fontWeight(FontWeight.Bold)
-          .fontColor('#FFFFFF')
+          .fontColor(GREEN)
           .textAlign(TextAlign.Center)
-          .lineHeight(30)
-          .backgroundColor(CORAL)
-          .borderRadius(15)
         Text(item.title)
-          .fontSize(19)
+          .fontSize(17)
           .fontWeight(FontWeight.Bold)
           .fontColor(INK)
           .layoutWeight(1)
-          .maxLines(1)
-          .textOverflow({ overflow: TextOverflow.Ellipsis })
+          .maxLines(2)
       }
       .width('100%')
       Text(item.subtitle)
-        .fontSize(14)
+        .fontSize(13)
         .fontColor(MUTED)
         .lineHeight(20)
         .width('100%')
       Row({ space: 10 }) {
-        this.GuideImage(this.guideIncorrectResource(item.id), RED_SOFT)
-        Text('→')
-          .width(28)
-          .fontSize(22)
-          .fontWeight(FontWeight.Bold)
-          .fontColor(CORAL)
-          .textAlign(TextAlign.Center)
-        this.GuideImage(this.guideCorrectResource(item.id), GREEN_SOFT)
+        this.GuideImage(this.guideIncorrectResource(item.id), false)
+        SymbolGlyph($r('sys.symbol.arrow_right')).fontSize(18).fontColor([MUTED]).width(24)
+        this.GuideImage(this.guideCorrectResource(item.id), true)
       }
       .width('100%')
     }
     .width('100%')
     .padding(16)
     .backgroundColor(GLASS)
-    .borderRadius(24)
-    .border({ width: 1, color: BORDER_GLASS })
-    .shadow({ radius: 16, color: SHADOW_CARD, offsetY: 7 })
+    .borderRadius(22)
   }
   @Builder
-  private GuideImage(resource: Resource, background: string) {
-    Stack() {
+  private GuideImage(resource: Resource, corrected: boolean) {
+    Column({ space: 6 }) {
       Image(resource)
-        .width('92%')
-        .height('92%')
+        .width('100%')
+        .height(108)
         .objectFit(ImageFit.Contain)
+      Text(corrected ? '调整后' : '调整前').fontSize(11).fontColor(corrected ? GREEN : MUTED)
     }
     .layoutWeight(1)
-    .height(124)
-    .backgroundColor(background)
-    .borderRadius(18)
-    .border({ width: 1, color: LINE_SOFT })
+    .height(130)
   }
   @Builder
   private SettingsPage() {
-    Column({ space: 14 }) {
+    Column({ space: 4 }) {
       this.CalibrationPanel()
       this.SamplingPanel()
       this.PrivacyPanel()
-      this.FloatingPanel()
       this.DeveloperDebugPanel()
-      Button('清空本机数据')
-        .height(48)
-        .width('100%')
-        .fontSize(16)
-        .fontWeight(FontWeight.Bold)
-        .fontColor(CORAL)
-        .backgroundColor(GLASS)
-        .borderRadius(22)
-        .border({ width: 1, color: '#F0C9C5' })
-        .shadow({ radius: 16, color: SHADOW_CARD, offsetY: 6 })
-        .opacity(this.actionOpacity())
-        .onClick(() => {
-          this.requestClearData();
-        })
+      Row() {
+        Text('本机数据').fontSize(15).fontColor(INK).layoutWeight(1)
+        Button('清空本机数据').fontSize(13).fontColor(RED).height(40)
+          .padding({ left: 14, right: 14 }).backgroundColor(RED_SOFT)
+          .enabled(!this.controlsLocked()).opacity(this.actionOpacity())
+          .onClick(() => { this.requestClearData(); })
+      }.width('100%').padding({ top: 14, bottom: 14 })
+      Text('坐直了 0.2.5').fontSize(11).fontColor(MUTED).margin({ top: 12 })
     }
     .width('100%')
   }
@@ -3608,18 +3531,20 @@ struct Index {
     Column({ space: 10 }) {
       Row() {
         Column({ space: 5 }) {
-          Text('浮窗').fontSize(17).fontWeight(FontWeight.Bold).fontColor(INK)
-          Text(this.floatVisible ? '已开启' : '未开启').fontSize(13).fontColor(MUTED)
+          Text('坐姿浮窗').fontSize(17).fontWeight(FontWeight.Bold).fontColor(INK)
+          Text(this.floatBusy ? '正在处理' : (this.floatVisible ? '已开启' : '未开启'))
+            .fontSize(13).fontColor(MUTED)
         }.alignItems(HorizontalAlign.Start).layoutWeight(1)
         Toggle({ type: ToggleType.Switch, isOn: this.floatVisible }).selectedColor(GREEN)
-          .enabled(!this.controlsLocked()).accessibilityText('坐姿浮窗')
+          .enabled(!this.controlsLocked() && !this.floatBusy).accessibilityText('坐姿浮窗')
           .onChange((value: boolean) => { if (value !== this.floatVisible) { this.toggleFloatingWindow(); } })
       }.width('100%')
+      Text(this.floatCapability).fontSize(12).fontColor(MUTED).lineHeight(18).width('100%')
       if (this.floatMessage.length > 0) {
         Text(this.floatMessage).fontSize(12).fontColor(MUTED).lineHeight(18).width('100%')
       }
       Text('离开应用后，相机检测暂停').fontSize(12).fontColor(MUTED).width('100%')
-    }.width('100%').padding(16).backgroundColor(GLASS).borderRadius(20)
+    }.width('100%').padding({ top: 12, bottom: 16 }).border({ width: { bottom: 1 }, color: LINE_SOFT })
   }
   @Builder
   private QuickCalibrationPanel() {
@@ -3640,11 +3565,7 @@ struct Index {
   @Builder
   private CalibrationPanel() {
     Column({ space: 12 }) {
-      Text('校准')
-        .fontSize(17)
-        .fontWeight(FontWeight.Bold)
-        .fontColor(INK)
-        .width('100%')
+      this.SettingsSectionTitle('坐姿校准', $r('sys.symbol.viewfinder_square'), GREEN)
       Text(this.formatCalibrationStatus(this.settings.profile.calibratedAt))
         .fontSize(13)
         .fontColor(MUTED)
@@ -3698,7 +3619,7 @@ struct Index {
       }
       Row({ space: 10 }) {
         Button(this.isManualOperation ? '校准中' : '校准坐姿')
-          .height(48)
+        .height(44)
           .layoutWeight(1)
           .fontSize(15)
           .fontWeight(FontWeight.Bold)
@@ -3711,7 +3632,7 @@ struct Index {
             this.calibrateFromCurrent();
           })
         Button('恢复默认')
-          .height(48)
+          .height(44)
           .layoutWeight(1)
           .fontSize(15)
           .fontWeight(FontWeight.Bold)
@@ -3733,29 +3654,22 @@ struct Index {
       }
     }
     .width('100%')
-    .padding(16)
-    .backgroundColor(GLASS)
-    .borderRadius(24)
-    .border({ width: 1, color: BORDER_GLASS })
-    .shadow({ radius: 18, color: SHADOW_CARD, offsetY: 8 })
+    .padding({ top: 12, bottom: 20 })
+    .border({ width: { bottom: 1 }, color: LINE_SOFT })
   }
   @Builder
   private SamplingPanel() {
     Column({ space: 12 }) {
-      Text('识别设置')
-        .fontSize(17)
-        .fontWeight(FontWeight.Bold)
-        .fontColor(INK)
-        .width('100%')
+      this.SettingsSectionTitle('识别设置', $r('sys.symbol.slider_horizontal_2'), BLUE)
       Text('灵敏度').fontSize(13).fontColor(MUTED).width('100%')
       Row({ space: 4 }) {
         this.SegmentButton('标准', STANDARD_SENSITIVITY)
         this.SegmentButton('灵敏', SENSITIVE_SENSITIVITY)
       }
       .width('100%')
-      .padding(4)
+      .padding(3)
       .backgroundColor(GLASS_SOFT)
-      .borderRadius(14)
+      .borderRadius(24)
       Text('检测间隔').fontSize(13).fontColor(MUTED).width('100%')
       Row({ space: 4 }) {
         this.IntervalButton(2000)
@@ -3763,16 +3677,13 @@ struct Index {
         this.IntervalButton(5000)
       }
       .width('100%')
-      .padding(4)
+      .padding(3)
       .backgroundColor(GLASS_SOFT)
-      .borderRadius(14)
+      .borderRadius(24)
     }
     .width('100%')
-    .padding(16)
-    .backgroundColor(GLASS)
-    .borderRadius(24)
-    .border({ width: 1, color: BORDER_GLASS })
-    .shadow({ radius: 18, color: SHADOW_CARD, offsetY: 8 })
+    .padding({ top: 16, bottom: 20 })
+    .border({ width: { bottom: 1 }, color: LINE_SOFT })
   }
   @Builder
   private SegmentButton(label: string, value: number) {
@@ -3782,10 +3693,10 @@ struct Index {
         .fontWeight(this.isSensitivitySelected(value) ? FontWeight.Bold : FontWeight.Regular)
         .fontColor(this.isSensitivitySelected(value) ? GREEN_DEEP : MUTED)
     }
-      .height(38)
+      .height(40)
       .layoutWeight(1)
       .backgroundColor(this.isSensitivitySelected(value) ? '#FFFFFF' : '#00000000')
-      .borderRadius(10)
+      .borderRadius(21)
       .opacity(this.actionOpacity())
       .enabled(!this.controlsLocked())
       .accessibilityText(label + (this.isSensitivitySelected(value) ? '，已选择' : ''))
@@ -3796,13 +3707,13 @@ struct Index {
   @Builder
   private IntervalButton(value: number) {
     Button(this.intervalLabel(value), { type: ButtonType.Normal })
-      .height(38)
+      .height(40)
       .layoutWeight(1)
       .fontSize(14)
       .fontWeight(FontWeight.Bold)
       .fontColor(this.settings.profile.sampleIntervalMs === value ? GREEN_DEEP : MUTED)
       .backgroundColor(this.settings.profile.sampleIntervalMs === value ? '#FFFFFF' : '#00000000')
-      .borderRadius(10)
+      .borderRadius(21)
       .opacity(this.actionOpacity())
       .enabled(!this.controlsLocked())
       .onClick(() => {
@@ -3812,11 +3723,7 @@ struct Index {
   @Builder
   private PrivacyPanel() {
     Column({ space: 10 }) {
-      Text('隐私与提醒')
-        .fontSize(17)
-        .fontWeight(FontWeight.Bold)
-        .fontColor(INK)
-        .width('100%')
+      this.SettingsSectionTitle('隐私与提醒', $r('sys.symbol.lock_shield_fill'), GREEN)
       this.SoundSwitchRow()
       Divider().color(LINE_SOFT)
       this.VibrationSwitchRow()
@@ -3832,11 +3739,15 @@ struct Index {
       Text('嘴部使用本机张口信号；未可靠识别时不计分').fontSize(12).fontColor(MUTED).width('100%')
     }
     .width('100%')
-    .padding(16)
-    .backgroundColor(GLASS)
-    .borderRadius(24)
-    .border({ width: 1, color: BORDER_GLASS })
-    .shadow({ radius: 18, color: SHADOW_CARD, offsetY: 8 })
+    .padding({ top: 16, bottom: 20 })
+    .border({ width: { bottom: 1 }, color: LINE_SOFT })
+  }
+  @Builder
+  private SettingsSectionTitle(title: string, symbol: Resource, color: string) {
+    Row({ space: 8 }) {
+      SymbolGlyph(symbol).fontSize(18).fontColor([color])
+      Text(title).fontSize(16).fontWeight(FontWeight.Bold).fontColor(INK)
+    }.width('100%').height(28)
   }
   @Builder
   private CoreVisionSwitchRow() {
@@ -3978,7 +3889,7 @@ struct Index {
       }
     }
     .width('100%')
-    .padding(16)
+    .padding({ top: 14, bottom: 14 })
     .border({ width: { top: 1 }, color: LINE_SOFT })
   }
 }

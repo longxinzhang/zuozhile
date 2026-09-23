@@ -1,4 +1,4 @@
-import { GLASS_SOFT, INK, LINE_SOFT, MUTED, SHADOW_CARD } from '../theme/ZuozhiTheme';
+import { GLASS, GLASS_SOFT, INK, LINE_SOFT, MUTED } from '../theme/ZuozhiTheme';
 
 @Component
 export struct StatTile {
@@ -7,21 +7,23 @@ export struct StatTile {
   @Prop color: string = INK;
 
   build() {
-    Column({ space: 6 }) {
+    Column({ space: 8 }) {
       Text(this.label)
         .fontSize(12)
         .fontColor(MUTED)
       Text(this.value)
-        .fontSize(26)
+        .fontSize(28)
         .minFontSize(18)
-        .maxFontSize(26)
+        .maxFontSize(28)
         .maxLines(1)
         .fontWeight(FontWeight.Bold)
         .fontColor(this.color)
     }
-    .height(76)
+    .height(90)
     .layoutWeight(1)
     .justifyContent(FlexAlign.Center)
+    .backgroundColor(GLASS)
+    .borderRadius(20)
   }
 }
 
@@ -42,9 +44,9 @@ export struct SmallCounter {
         .fontWeight(FontWeight.Bold)
         .fontColor(this.color)
     }
-    .height(42)
+    .height(32)
     .layoutWeight(1)
-    .padding({ left: 10, right: 10 })
+    .padding({ left: 4, right: 4 })
   }
 }
 
