@@ -1,6 +1,7 @@
 import { faceDetector, skeletonDetection, visionBase } from '@kit.CoreVisionKit';
 import { image } from '@kit.ImageKit';
 import { BusinessError } from '@ohos.base';
+import { SkeletonDebugFeed } from './SkeletonDebugFeed';
 import {
   FaceFrame,
   Point2D,
@@ -64,6 +65,7 @@ export class CoreVisionPostureDetector {
   }
 
   async detect(pixelMap: image.PixelMap): Promise<PostureSample> {
+    const debugSession = SkeletonDebugFeed.session();
     await this.prepare();
     const request: visionBase.Request = {
       inputData: { pixelMap }
@@ -92,11 +94,16 @@ export class CoreVisionPostureDetector {
       skeletonWarning + ' · 人脸检测完成 · ' + countDetail :
       '骨架与人脸检测完成 · ' + countDetail;
 
-    return {
+    const sample: PostureSample = {
       timestamp: Date.now(),
       skeleton: this.toSkeletonFrame(skeletonResponse),
       face: this.toFaceFrame(faces)
     };
+    if (debugSession !== 0) {
+      await SkeletonDebugFeed.publish(debugSession, pixelMap,
+        this.selectPrimarySkeleton(skeletonResponse.skeletons), skeletonCount, sample.timestamp);
+    }
+    return sample;
   }
 
   async release(): Promise<void> {

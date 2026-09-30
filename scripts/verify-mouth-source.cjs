@@ -14,13 +14,15 @@ const code = ts.transpileModule(fs.readFileSync(file, 'utf8'), {
 function setup() {
   const calls = [];
   const state = { nativeFaces: 1, coreFaces: 1, jaw: .6, gap: .08, confidence: .99, yaw: 0, pitch: 0,
-    startError: false, captureError: false, detectorError: false };
+    startError: false, captureError: false, detectorError: false, pixelOptions: undefined,
+    detectedPixel: undefined };
+  const rgba = new Uint8Array([255, 0, 0, 255, 0, 255, 0, 255, 0, 0, 255, 255, 255, 255, 255, 255]);
   const native = {
     start() { calls.push('start'); if (state.startError) throw new Error('unsupported'); },
     async capture() {
       calls.push('capture');
       if (state.captureError) throw new Error('camera error');
-      return { rgba: new ArrayBuffer(16), width: 2, height: 2, jawOpen: state.jaw, lipGapRatio: state.gap,
+      return { rgba: rgba.buffer, width: 2, height: 2, jawOpen: state.jaw, lipGapRatio: state.gap,
         faceCount: state.nativeFaces, timestampMs: 1234 };
     },
     stop() { calls.push('stop'); }
@@ -30,16 +32,23 @@ function setup() {
     '@kit.CameraKit': { camera: { CameraPosition: { CAMERA_POSITION_FRONT: 1 }, getCameraManager: () => ({
       getSupportedCameras: () => [{ cameraPosition: 1, cameraOrientation: 270 }]
     }) } },
-    '@kit.ImageKit': { image: { PixelMapFormat: { RGBA_8888: 3 }, async createPixelMap() {
+    '@kit.ImageKit': { image: { PixelMapFormat: { RGBA_8888: 3 }, async createPixelMap(buffer, options) {
       calls.push('pixelMap');
-      return { async rotate(angle) { calls.push(`rotate:${angle}`); }, async release() { calls.push('releasePixelMap'); } };
+      state.pixelOptions = options;
+      assert.equal(buffer, rgba.buffer);
+      const bytes = new Uint8Array(buffer);
+      // ImageKit defaults the source buffer to BGRA when srcPixelFormat is omitted.
+      const firstPixel = options.srcPixelFormat === 3 ? [...bytes.slice(0, 4)] : [bytes[2], bytes[1], bytes[0], bytes[3]];
+      return { firstPixel, async rotate(angle) { calls.push(`rotate:${angle}`); },
+        async release() { calls.push('releasePixelMap'); } };
     } } },
     '@kit.PerformanceAnalysisKit': { hilog: { info() {}, warn() {} } },
     'libposture_ar.so': native,
     './CoreVisionPostureDetector': { CoreVisionPostureDetector: class {
       async prepare() { calls.push('prepare'); }
-      async detect() {
+      async detect(pixelMap) {
         calls.push('detect');
+        state.detectedPixel = pixelMap.firstPixel;
         if (state.detectorError) throw new Error('inference failed');
         return { timestamp: 1234, skeleton: {}, face: { confidence: state.confidence,
           yaw: state.yaw, pitch: state.pitch, roll: 0, mouthOpenRatio: 0, mouthAvailable: false } };
@@ -66,6 +75,10 @@ async function main() {
   let sample = await source.sample({});
   assert.equal(sample.face.mouthAvailable, true);
   assert.equal(sample.face.jawOpen, .6);
+  assert.equal(state.pixelOptions.srcPixelFormat, 3, 'Native RGBA buffer must explicitly declare its source format');
+  assert.equal(state.pixelOptions.pixelFormat, 3);
+  assert.deepEqual(state.detectedPixel, [255, 0, 0, 255], 'A red input pixel must remain red at the detector');
+  console.log('PASS: explicit RGBA source and destination; camera buffer reaches detection without red/blue swap');
   assert.deepEqual(calls, ['start', 'prepare', 'capture', 'pixelMap', 'rotate:270', 'detect', 'releasePixelMap']);
   for (const patch of [{ nativeFaces: 0 }, { nativeFaces: 2 }, { coreFaces: 2 }, { confidence: .7 },
     { yaw: 36 }, { pitch: -31 }, { jaw: -1 }, { jaw: NaN }, { jaw: 1.01 }, { gap: -1 }, { gap: NaN }]) {

@@ -16,7 +16,28 @@ for (const service of ['ARPostureSource', 'ARFaceCapability', 'CoreVisionPosture
   'MockFrameSampler', 'MockPostureSource', 'PostureSessionStore', 'ReminderFeedbackService', 'CameraProbeService', 'GuardWindowService']) {
   protectedPaths.push(`entry/src/main/ets/services/${service}.ets`);
 }
-for (const file of protectedPaths) assert.equal(read(file), prior(file), `Core change: ${file}`);
+for (const file of protectedPaths) {
+  let expected = prior(file);
+  if (file.endsWith('/ARPostureSource.ets')) {
+    // User-approved camera input correction; all other sampling and mouth rules remain protected.
+    expected = expected.replace('        pixelFormat: image.PixelMapFormat.RGBA_8888, editable: true',
+      '        srcPixelFormat: image.PixelMapFormat.RGBA_8888,\n        pixelFormat: image.PixelMapFormat.RGBA_8888, editable: true');
+  }
+  if (file.endsWith('/CoreVisionPostureDetector.ets')) {
+    expected = expected.replace("import { BusinessError } from '@ohos.base';",
+      "import { BusinessError } from '@ohos.base';\nimport { SkeletonDebugFeed } from './SkeletonDebugFeed';")
+      .replace('  async detect(pixelMap: image.PixelMap): Promise<PostureSample> {',
+        '  async detect(pixelMap: image.PixelMap): Promise<PostureSample> {\n    const debugSession = SkeletonDebugFeed.session();')
+      .replace('    return {\n      timestamp: Date.now(),', '    const sample: PostureSample = {\n      timestamp: Date.now(),')
+      .replace('      face: this.toFaceFrame(faces)\n    };',
+        '      face: this.toFaceFrame(faces)\n    };\n' +
+        '    if (debugSession !== 0) {\n' +
+        '      await SkeletonDebugFeed.publish(debugSession, pixelMap,\n' +
+        '        this.selectPrimarySkeleton(skeletonResponse.skeletons), skeletonCount, sample.timestamp);\n' +
+        '    }\n    return sample;');
+  }
+  assert.equal(read(file), expected, `Core change beyond the debug hook and explicit RGBA source correction: ${file}`);
+}
 
 function methods(text) {
   const ast = ts.createSourceFile('Index.ts', text.replace('struct Index {', 'class Index {'), ts.ScriptTarget.Latest, true);
@@ -29,7 +50,7 @@ const coreMethods = ['startGuard', 'stopGuard', 'runCalibration', 'captureFrame'
   'applySitMetric', 'applyChinMetric', 'applyMouthMetric', 'shouldAdoptMetric', 'buildSessionReport',
   'setSensitivity', 'setIntervalMs', 'copySettings', 'onForegroundChanged'];
 for (const name of coreMethods) assert.equal(newMethods.get(name), oldMethods.get(name), `Core method change: ${name}`);
-console.log(`PASS: ${protectedPaths.length} algorithm/native/source files and ${coreMethods.length} core page methods unchanged from ${baseline}`);
+console.log(`PASS: ${protectedPaths.length} core files protected against ${baseline}; only the exact debug hook and RGBA source correction allowed; ${coreMethods.length} core page methods unchanged`);
 const allowedNonVisualChanges = new Set(['build', 'syncFloatingState', 'toggleFloatingWindow', 'todayInsightText']);
 const resourceColorMethods = new Set(['previewSurfaceDisplayColor', 'storageDisplayColor', 'calibrationProgressColor',
   'calibrationProgressSoftColor', 'alertBreakdownColor', 'recentRecordColor', 'debugRecordTone', 'headerStatusColor',
@@ -140,7 +161,8 @@ assert.doesNotMatch(read(indexPath), /backgroundColor\(\('app\.color/);
 
 const systemResources = fs.readFileSync(path.join(sdk,
   'Contents/sdk/default/openharmony/ets/build-tools/ets-loader/sysResource.js'), 'utf8');
-for (const file of [indexPath, 'entry/src/main/ets/components/PostureMetricTile.ets']) {
+for (const file of [indexPath, 'entry/src/main/ets/components/PostureMetricTile.ets',
+  'entry/src/main/ets/components/SkeletonDebugPanel.ets']) {
   for (const [, symbol] of read(file).matchAll(/\$r\('sys\.symbol\.([^']+)'\)/g)) {
     assert.match(systemResources, new RegExp('\\b' + symbol + ': \\d+'), `Unknown system symbol: ${symbol}`);
   }

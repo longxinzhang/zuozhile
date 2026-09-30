@@ -24,6 +24,8 @@ import {
   createDefaultSettings
 } from '../models/PostureTypes';
 import { PostureSessionStore } from '../services/PostureSessionStore';
+import { SkeletonDebugFeed } from '../services/SkeletonDebugFeed';
+import { SkeletonDebugPanel } from '../components/SkeletonDebugPanel';
 import { AppearanceStore } from '../services/AppearanceStore';
 import { normalizeImmersiveLevel } from '../theme/AppearanceOptions';
 import { BaselineTile, SmallCounter, StatTile } from '../components/StatusTiles';
@@ -1120,6 +1122,51 @@ struct Index {
       }
     } finally {
       this.isManualOperation = false;
+    }
+  }
+  private async sampleSkeletonOnce(): Promise<void> {
+    if (this.controlsLocked() || this.isSampling || this.isGuarding || !this.appForeground ||
+      !this.settings.useCoreVision || SkeletonDebugFeed.session() === 0) {
+      return;
+    }
+    const pageRunId = this.pageRunId;
+    const debugSession = SkeletonDebugFeed.session();
+    this.isManualOperation = true;
+    let sourceCreated = false;
+    try {
+      const sourceReady = await this.prepareSourceAccess();
+      if (!this.isCurrentPageRun(pageRunId) || !this.appForeground ||
+        debugSession !== SkeletonDebugFeed.session()) {
+        return;
+      }
+      if (!sourceReady) {
+        SkeletonDebugFeed.fail('相机未就绪，请检查相机权限');
+        return;
+      }
+      await this.rebuildPostureSource();
+      sourceCreated = true;
+      if (!this.isCurrentPageRun(pageRunId) || !this.appForeground ||
+        debugSession !== SkeletonDebugFeed.session()) {
+        return;
+      }
+      // Read-only diagnostics: no evaluation, reminders, records or baseline writes.
+      await this.postureSource.sample(this.settings.profile);
+    } catch (ignore) {
+      if (debugSession === SkeletonDebugFeed.session()) {
+        SkeletonDebugFeed.fail('采集失败，请重试');
+      }
+    } finally {
+      try {
+        if (sourceCreated) {
+          await this.releasePostureSource();
+        }
+      } catch (ignore) {
+        if (debugSession === SkeletonDebugFeed.session()) {
+          SkeletonDebugFeed.fail('相机释放失败，请退出后重试');
+        }
+      } finally {
+        this.isManualOperation = false;
+      }
     }
   }
   private createPostureSource(): PostureSource {
@@ -3536,7 +3583,7 @@ struct Index {
           .enabled(!this.controlsLocked()).opacity(this.actionOpacity())
           .onClick(() => { this.requestClearData(); })
       }.width('100%').padding({ top: 14, bottom: 14 })
-      Text('坐直了 0.2.6').fontSize(11).fontColor(MUTED).margin({ top: 12 })
+      Text('坐直了 0.2.7').fontSize(11).fontColor(MUTED).margin({ top: 12 })
     }
     .width('100%')
   }
@@ -3946,6 +3993,10 @@ struct Index {
         this.showDebugPanel = !this.showDebugPanel;
       })
       if (this.showDebugPanel) {
+        SkeletonDebugPanel({ active: this.activeTab === 3 && this.appForeground,
+          realSource: this.settings.useCoreVision, guarding: this.isGuarding,
+          locked: this.controlsLocked(), intervalMs: this.settings.profile.sampleIntervalMs,
+          requestFrame: async (): Promise<void> => { await this.sampleSkeletonOnce(); } })
         this.CoreVisionSwitchRow()
         this.PrivacySwitchRow()
         Button('抽样一次')

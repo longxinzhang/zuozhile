@@ -49,6 +49,7 @@ export class ARPostureSource implements PostureSource {
       const frame = await nativeAR.capture();
       pixelMap = await image.createPixelMap(frame.rgba, {
         size: { width: frame.width, height: frame.height },
+        srcPixelFormat: image.PixelMapFormat.RGBA_8888,
         pixelFormat: image.PixelMapFormat.RGBA_8888, editable: true
       });
       await pixelMap.rotate(this.rotation);
