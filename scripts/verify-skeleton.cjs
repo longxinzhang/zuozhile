@@ -4,8 +4,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
 const root = path.resolve(__dirname, '..');
-const sdk = process.env.DEVECO_HOME || '/Applications/DevEco-Studio.app';
-const ts = require(path.join(sdk, 'Contents/sdk/default/openharmony/ets/build-tools/ets-loader/node_modules/typescript'));
+const { typescript: ts, sdkPath } = require('./deveco-sdk.cjs');
 const read = file => fs.readFileSync(path.join(root, 'entry/src/main/ets', file + '.ets'), 'utf8');
 const compilerOptions = { target: ts.ScriptTarget.ES2020, module: ts.ModuleKind.CommonJS };
 function load(file, dependencies = {}) {
@@ -59,7 +58,7 @@ const drawing = geometry.skeletonDrawing(raw, 720, 1280, 300, 400, true);
 assert.equal(drawing.joints.length, 7);
 assert.equal(drawing.bones.length, 6, 'Missing elbow must not be replaced with a shoulder-to-wrist bone');
 assert.equal(geometry.skeletonDrawing(raw, 0, 1280, 300, 400, false).bones.length, 0);
-const sdkEnum = fs.readFileSync(path.join(sdk, 'Contents/sdk/default/hms/ets/api/@hms.ai.vision.skeletonDetection.d.ts'), 'utf8');
+const sdkEnum = fs.readFileSync(sdkPath('hms/ets/api/@hms.ai.vision.skeletonDetection.d.ts'), 'utf8');
 for (const [name, value] of Object.entries({ NOSE: 0, LEFT_EYE: 1, RIGHT_EYE: 2, LEFT_EAR: 3, RIGHT_EAR: 4,
   LEFT_SHOULDER: 5, RIGHT_SHOULDER: 6, LEFT_ELBOW: 7, RIGHT_ELBOW: 8, LEFT_WRIST: 9, RIGHT_WRIST: 10,
   LEFT_HIP: 11, RIGHT_HIP: 12, LEFT_KNEE: 13, RIGHT_KNEE: 14, LEFT_ANKLE: 15, RIGHT_ANKLE: 16 })) {
@@ -67,7 +66,7 @@ for (const [name, value] of Object.entries({ NOSE: 0, LEFT_EYE: 1, RIGHT_EYE: 2,
 }
 console.log('PASS: SDK 17-point ordering, contain projection, portrait/landscape/square, mirroring and unreliable joint rejection');
 
-const utilSdk = fs.readFileSync(path.join(sdk, 'Contents/sdk/default/openharmony/ets/api/@ohos.util.d.ts'), 'utf8');
+const utilSdk = fs.readFileSync(sdkPath('openharmony/ets/api/@ohos.util.d.ts'), 'utf8');
 assert.match(utilSdk, /encodeToString\(src: Uint8Array[^)]*\): Promise<string>/,
   'Base64 mock must match the asynchronous SDK contract');
 
@@ -245,6 +244,9 @@ async function main() {
   const detector = new Detector();
   const before = JSON.stringify({ primary, face });
   const plain = await detector.detect(pixels);
+  assert.equal(plain.reminderEvidence.faceCount, 1);
+  assert.equal(plain.reminderEvidence.skeletonCount, 2);
+  assert.equal(plain.reminderEvidence.associationAmbiguous, true);
   let observed;
   token = feed.connect(frame => { observed = frame; }, false);
   const inspected = await detector.detect(pixels);

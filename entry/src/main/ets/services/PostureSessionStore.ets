@@ -93,7 +93,9 @@ function sanitizeSettings(settings: UserSettings): UserSettings {
     useCoreVision: settings.useCoreVision !== false,
     privacyMode: settings.privacyMode !== false,
     gentleSound: settings.gentleSound === true,
-    vibration: settings.vibration !== false
+    vibration: settings.vibration !== false,
+    lowScoreEdgeLight: settings.lowScoreEdgeLight !== false,
+    reduceReminderMotion: settings.reduceReminderMotion === true
   };
 }
 

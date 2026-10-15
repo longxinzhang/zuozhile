@@ -97,7 +97,12 @@ export class CoreVisionPostureDetector {
     const sample: PostureSample = {
       timestamp: Date.now(),
       skeleton: this.toSkeletonFrame(skeletonResponse),
-      face: this.toFaceFrame(faces)
+      face: this.toFaceFrame(faces),
+      reminderEvidence: {
+        faceCount,
+        skeletonCount,
+        associationAmbiguous: faceCount > 1 || skeletonCount > 1
+      }
     };
     if (debugSession !== 0) {
       await SkeletonDebugFeed.publish(debugSession, pixelMap,

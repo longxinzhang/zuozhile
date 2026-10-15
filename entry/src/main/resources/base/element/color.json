@@ -49,6 +49,8 @@
     { "name": "control_highlight_3", "value": "#12FFFFFF" },
     { "name": "control_highlight_4", "value": "#1CFFFFFF" },
     { "name": "control_highlight_5", "value": "#28FFFFFF" },
-    { "name": "control_edge", "value": "#28FFFFFF" }
+    { "name": "control_edge", "value": "#28FFFFFF" },
+    { "name": "low_score_edge_light", "value": "#E99691" },
+    { "name": "low_score_edge_strong", "value": "#D9534C" }
   ]
 }

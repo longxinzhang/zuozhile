@@ -3,7 +3,9 @@ import { SymbolGlyphModifier } from '@kit.ArkUI';
 import { buildCalibrationProfile } from '../models/PostureCalibration';
 import { captureCalibration } from '../models/CalibrationCapture';
 import { evaluatePosture } from '../models/PostureEvaluator';
-import { ReminderEngine, actionLabel, alertTypeLabel, alertTypeSubtitle, alertTypeTitle } from '../models/ReminderEngine';
+import { actionLabel, alertTypeLabel, alertTypeSubtitle } from '../models/ReminderEngine';
+import { LowScoreDecision, LowScoreLevel, LowScoreReminderContext, LowScoreReminderScheduler,
+  PHONE_VIBRATION_COOLDOWN } from '../models/LowScoreReminder';
 import { HourBucket, buildAlertBreakdown, buildRecentBuckets, computeTodayStats } from '../models/SessionStats';
 import {
   AlertBreakdownItem,
@@ -26,6 +28,7 @@ import {
 import { PostureSessionStore } from '../services/PostureSessionStore';
 import { SkeletonDebugFeed } from '../services/SkeletonDebugFeed';
 import { SkeletonDebugPanel } from '../components/SkeletonDebugPanel';
+import { LowScoreEdgeLight } from '../components/LowScoreEdgeLight';
 import { AppearanceStore } from '../services/AppearanceStore';
 import { normalizeImmersiveLevel } from '../theme/AppearanceOptions';
 import { BaselineTile, SmallCounter, StatTile } from '../components/StatusTiles';
@@ -142,7 +145,7 @@ const CALIBRATION_FRAME_COUNT = 10;
 const QUICK_CALIBRATION_FRAME_COUNT = 5;
 const CALIBRATION_COUNTDOWN_SECONDS = 3;
 const CALIBRATION_COUNTDOWN_DELAY_MS = 1000;
-const HARD_REMINDER_TIMEOUT_MS = 8000;
+const BREAK_MESSAGE_TIMEOUT_MS = 8000;
 const DISPLAY_STABLE_FRAMES = 2;
 const REPORT_ALERT_PRIORITY: PostureAlertType[] = [
   PostureAlertType.ITEM_02,
@@ -186,7 +189,11 @@ struct Index {
   @State private reminderAction: ReminderAction = ReminderAction.NONE;
   @State private reminderAlertType: PostureAlertType = PostureAlertType.NONE;
   @State private reminderMessage: string = '';
-  @State private showHardReminder: boolean = false;
+  @State private lowScoreLevel: LowScoreLevel = LowScoreLevel.NORMAL;
+  @State private lowScoreEdgeVisible: boolean = false;
+  @State private lowScoreDataValid: boolean = false;
+  @State private reminderPreviewLevel: LowScoreLevel = LowScoreLevel.NORMAL;
+  @State private reminderPreviewMessage: string = '';
   @State private showClearDataConfirm: boolean = false;
   @State private showResetCalibrationConfirm: boolean = false;
   @State private showCoreVisionConfirm: boolean = false;
@@ -225,7 +232,13 @@ struct Index {
   @State private debugFeedbackText: string = '';
   private pageScrollers: Scroller[] = [new Scroller(), new Scroller(), new Scroller(), new Scroller()];
   private timer: number = -1;
-  private hardReminderTimer: number = -1;
+  private reminderExpiryTimer: number = -1;
+  private breakMessageTimer: number = -1;
+  private reminderExpiryRunId: number = 0;
+  private breakMessageRunId: number = 0;
+  private reminderPreviewRunId: number = 0;
+  private lowScoreExpiresAt: number = 0;
+  private lowScoreLatestScore: number = 100;
   private guardRunId: number = 0;
   private pageRunId: number = 0;
   private storageOperationId: number = 0;
@@ -240,7 +253,7 @@ struct Index {
   private mouthCandidateCount: number = 0;
   private cameraPreviewController: XComponentController = new XComponentController();
   private guardWindow: GuardWindowService = new GuardWindowService();
-  private reminder: ReminderEngine = new ReminderEngine();
+  private lowScoreScheduler: LowScoreReminderScheduler = new LowScoreReminderScheduler();
   private postureSource: PostureSource = new MockPostureSource();
   private sourceDisposal?: Promise<void>;
   aboutToAppear(): void {
@@ -255,11 +268,15 @@ struct Index {
   aboutToDisappear(): void {
     this.pageRunId += 1;
     this.calibrationCancelled = true;
+    this.stopReminderPreview();
+    this.stopLowScoreReminders();
     this.stopGuard(false);
   }
   private onForegroundChanged(): void {
     if (!this.appForeground) {
       this.calibrationCancelled = true;
+      this.stopReminderPreview();
+      this.stopLowScoreReminders();
       if (this.isGuarding) {
         this.stopGuard(true, true);
       }
@@ -344,7 +361,9 @@ struct Index {
       useCoreVision: settings.useCoreVision,
       privacyMode: settings.privacyMode,
       gentleSound: settings.gentleSound,
-      vibration: settings.vibration
+      vibration: settings.vibration,
+      lowScoreEdgeLight: settings.lowScoreEdgeLight,
+      reduceReminderMotion: settings.reduceReminderMotion
     };
   }
   private persistData(): void {
@@ -397,6 +416,7 @@ struct Index {
     if (this.isGuarding || this.isSampling || (!ignoreOperationLock && this.controlsLocked())) {
       return;
     }
+    this.stopReminderPreview();
     this.clearSessionReport();
     this.isStartingGuard = true;
     this.guardRunId += 1;
@@ -444,9 +464,9 @@ struct Index {
       this.lastSample = undefined;
       this.isGuarding = true;
       this.guardSessionStartedAt = Date.now();
-      this.reminder.reset();
       this.resetDisplayStability();
       this.resetReminderState('暂无提醒');
+      this.lowScoreScheduler.beginSession(runId, this.guardSessionStartedAt);
       if (this.timer >= 0) {
         clearInterval(this.timer);
         this.timer = -1;
@@ -481,6 +501,8 @@ struct Index {
     this.isStoppingGuard = true;
     this.guardRunId += 1;
     this.isStartingGuard = false;
+    this.stopReminderPreview();
+    this.stopLowScoreReminders();
     try {
       if (this.timer >= 0) {
         clearInterval(this.timer);
@@ -495,12 +517,7 @@ struct Index {
           this.buildSessionReport(sessionStartedAt, Date.now());
         }
       } else {
-        this.cancelHardReminderTimer();
-        this.stopReminderFeedback();
-        this.showHardReminder = false;
-        this.reminderAction = ReminderAction.NONE;
-        this.reminderAlertType = PostureAlertType.NONE;
-        this.reminderMessage = '';
+        this.clearReminderDisplay();
       }
       while (this.isSampling) {
         await this.sleep(20);
@@ -612,23 +629,35 @@ struct Index {
     this.isSampling = true;
     try {
       const sample = await this.postureSource.sample(this.settings.profile);
-      if (!this.isCurrentPageRun(pageRunId) || (!force && (!this.isGuarding || runId !== this.guardRunId))) {
+      if (!this.isCurrentPageRun(pageRunId) || !this.appForeground || runId !== this.guardRunId ||
+        (!force && !this.isGuarding)) {
         return;
       }
       this.lastSample = sample;
       const result = evaluatePosture(sample, this.settings.profile);
-      const action = this.reminder.feed(result, Date.now());
-      result.action = action;
-      result.primaryAlert = action === ReminderAction.NONE ? result.primaryAlert : this.reminder.alertType();
+      const context = this.lowScoreContext();
+      const decision = this.lowScoreScheduler.feed(sample, result, context, Date.now());
       this.applyResult(result);
-      this.appendRecord(result);
+      this.lowScoreLatestScore = result.score;
+      this.applyLowScoreDecision(decision);
+      if (this.isGuarding && this.appForeground && !this.isCalibrating && context.realSource &&
+        runId === this.guardRunId && sample.timestamp >= this.guardSessionStartedAt) {
+        result.action = decision.visualEvent || decision.breakEvent ? ReminderAction.SOFT : ReminderAction.NONE;
+        if (result.action !== ReminderAction.NONE) {
+          result.primaryAlert = decision.alertType;
+        }
+        this.appendRecord(result);
+        this.dispatchLowScoreFeedback(decision, sample.timestamp, runId, pageRunId);
+      }
       this.syncSourceStatus();
     } catch (error) {
-      if (!this.isCurrentPageRun(pageRunId) || (!force && (!this.isGuarding || runId !== this.guardRunId))) {
+      if (!this.isCurrentPageRun(pageRunId) || !this.appForeground || runId !== this.guardRunId ||
+        (!force && !this.isGuarding)) {
         return;
       }
       this.summary = '采样失败';
       this.reminderText = '检测源异常';
+      this.applyLowScoreDecision(this.lowScoreScheduler.invalidate());
       this.syncSourceStatus();
     } finally {
       this.isSampling = false;
@@ -761,22 +790,6 @@ struct Index {
       this.applyMouthMetric(result.mouth);
     }
     this.summary = this.displaySummary();
-    if (result.action !== ReminderAction.NONE) {
-      this.reminderAction = result.action;
-      this.reminderAlertType = result.primaryAlert;
-      this.reminderMessage = this.reminderCopy(result.action, result.primaryAlert);
-      this.notifyReminder(result.action);
-      if (result.action === ReminderAction.HARD) {
-        this.showHardReminder = true;
-        this.scheduleHardReminderDismiss();
-      }
-    } else if (this.reminderAction !== ReminderAction.HARD &&
-      !result.activeAlerts.includes(this.reminderAlertType)) {
-      this.clearReminderDisplay();
-    }
-    this.reminderText = this.reminderAction === ReminderAction.NONE ?
-      actionLabel(result.action, result.primaryAlert) :
-      actionLabel(this.reminderAction, this.reminderAlertType);
     this.lastSampleText = this.formatClock(result.timestamp);
   }
   private applySitMetric(metric: MetricResult): void {
@@ -854,6 +867,8 @@ struct Index {
     }
   }
   private async runCalibration(count: number, pageRunId: number): Promise<boolean> {
+    this.stopReminderPreview();
+    this.stopLowScoreReminders();
     this.isCalibrating = true;
     this.calibrationCancelled = false;
     this.isSampling = true;
@@ -890,7 +905,6 @@ struct Index {
       this.lastSample = result.samples[result.samples.length - 1];
       this.lastSampleText = this.formatClock(next.profile.calibratedAt);
       this.summary = '已记录当前基线';
-      this.reminder.reset();
       this.resetDisplayStability();
       this.resetReminderState('暂无提醒');
       this.setCalibrationProgress('校准完成，已记录当前基线', true, 100);
@@ -925,7 +939,6 @@ struct Index {
     this.settings = next;
     this.summary = '已恢复默认基线';
     this.setCalibrationProgress('已恢复默认基线', true, -1);
-    this.reminder.reset();
     this.resetDisplayStability();
     this.resetReminderState('暂无提醒');
     this.persistData();
@@ -968,7 +981,6 @@ struct Index {
     const next = this.copySettings(this.settings);
     next.profile.sensitivity = value;
     this.settings = next;
-    this.reminder.reset();
     this.resetDisplayStability();
     this.resetReminderState('已切换为' + this.sensitivityLabel(value));
     this.persistData();
@@ -1030,21 +1042,34 @@ struct Index {
     this.settings = next;
     this.persistData();
   }
-  private toggleSound(): void {
-    if (this.controlsLocked()) {
-      return;
-    }
-    const next = this.copySettings(this.settings);
-    next.gentleSound = !next.gentleSound;
-    this.settings = next;
-    this.persistData();
-  }
   private toggleVibration(): void {
     if (this.controlsLocked()) {
       return;
     }
     const next = this.copySettings(this.settings);
     next.vibration = !next.vibration;
+    this.settings = next;
+    if (!next.vibration) {
+      this.stopReminderFeedback();
+    }
+    this.persistData();
+  }
+  private toggleLowScoreEdgeLight(): void {
+    if (this.controlsLocked()) {
+      return;
+    }
+    const next = this.copySettings(this.settings);
+    next.lowScoreEdgeLight = !next.lowScoreEdgeLight;
+    this.settings = next;
+    this.applyLowScoreDecision(this.lowScoreScheduler.refresh(this.lowScoreContext(), Date.now()));
+    this.persistData();
+  }
+  private toggleReduceReminderMotion(): void {
+    if (this.controlsLocked()) {
+      return;
+    }
+    const next = this.copySettings(this.settings);
+    next.reduceReminderMotion = !next.reduceReminderMotion;
     this.settings = next;
     this.persistData();
   }
@@ -1066,7 +1091,6 @@ struct Index {
       this.settings = this.copySettings(defaults.settings);
       this.records = [];
       this.clearSessionReport();
-      this.reminder.reset();
       this.resetDisplayStability();
       this.score = 92;
       this.summary = '坐姿在线';
@@ -1262,11 +1286,16 @@ struct Index {
     return '当前检测源：' + this.sourceLabel + ' · ' + this.sourceDetail;
   }
   private resetReminderState(text: string): void {
-    this.cancelHardReminderTimer();
+    this.cancelReminderExpiry();
+    this.cancelBreakMessage();
+    this.lowScoreScheduler.invalidate();
     this.stopReminderFeedback();
+    this.lowScoreLevel = LowScoreLevel.NORMAL;
+    this.lowScoreEdgeVisible = false;
+    this.lowScoreDataValid = false;
+    this.lowScoreExpiresAt = 0;
     this.reminderText = text;
     this.clearReminderDisplay();
-    this.showHardReminder = false;
   }
   private clearReminderDisplay(): void {
     this.reminderAction = ReminderAction.NONE;
@@ -1291,41 +1320,192 @@ struct Index {
   private calibrationProgressPercentText(): string {
     return this.calibrationProgressPercent.toString() + '%';
   }
-  private cancelHardReminderTimer(): void {
-    if (this.hardReminderTimer >= 0) {
-      clearTimeout(this.hardReminderTimer);
-      this.hardReminderTimer = -1;
-    }
+  private lowScoreContext(): LowScoreReminderContext {
+    const context = new LowScoreReminderContext();
+    const source = this.postureSource.status();
+    context.sessionId = this.guardRunId;
+    context.startedAt = this.guardSessionStartedAt;
+    context.intervalMs = this.settings.profile.sampleIntervalMs;
+    context.foreground = this.appForeground;
+    context.guarding = this.isGuarding;
+    context.calibrating = this.isCalibrating;
+    context.realSource = this.settings.useCoreVision && source.isLive;
+    context.edgeLightEnabled = this.settings.lowScoreEdgeLight;
+    context.reduceMotion = this.settings.reduceReminderMotion;
+    context.vibrationEnabled = this.settings.vibration;
+    context.vibrationAvailable = ReminderFeedbackService.isAvailable();
+    return context;
   }
-  private clearHardReminder(): void {
-    this.cancelHardReminderTimer();
-    this.stopReminderFeedback();
-    this.showHardReminder = false;
-    if (this.reminderAction === ReminderAction.HARD) {
-      this.reminderAction = ReminderAction.NONE;
-      this.reminderAlertType = PostureAlertType.NONE;
-      this.reminderMessage = '';
+  private applyLowScoreDecision(decision: LowScoreDecision): void {
+    this.lowScoreLevel = decision.level;
+    this.lowScoreEdgeVisible = decision.edgeVisible;
+    this.lowScoreDataValid = decision.expiresAt > 0;
+    this.lowScoreExpiresAt = decision.expiresAt;
+    if (decision.level > LowScoreLevel.NORMAL) {
+      this.stopReminderPreview();
+      this.cancelBreakMessage();
+      this.reminderAction = decision.edgeVisible || decision.level >= LowScoreLevel.MEDIUM ?
+        ReminderAction.SOFT : ReminderAction.NONE;
+      this.reminderAlertType = decision.alertType;
+      this.reminderMessage = decision.message;
+      this.reminderText = this.lowScoreLevelText(decision.level);
+    } else if (decision.breakEvent) {
+      this.cancelBreakMessage();
+      this.reminderAction = ReminderAction.SOFT;
+      this.reminderAlertType = PostureAlertType.ITEM_12;
+      this.reminderMessage = decision.message;
+      this.reminderText = '休息提示';
+      const runId = this.guardRunId;
+      const pageRunId = this.pageRunId;
+      const messageRunId = this.breakMessageRunId;
+      this.breakMessageTimer = setTimeout(() => {
+        if (messageRunId !== this.breakMessageRunId || !this.isCurrentPageRun(pageRunId) ||
+          runId !== this.guardRunId || !this.appForeground || !this.isGuarding || this.isCalibrating) {
+          return;
+        }
+        this.breakMessageTimer = -1;
+        if (this.lowScoreLevel === LowScoreLevel.NORMAL) {
+          this.clearReminderDisplay();
+          this.reminderText = '无提醒';
+        }
+      }, BREAK_MESSAGE_TIMEOUT_MS);
+    } else if (decision.expiresAt === 0 || this.reminderAlertType !== PostureAlertType.ITEM_12 ||
+      this.breakMessageTimer < 0) {
+      this.cancelBreakMessage();
+      this.clearReminderDisplay();
       this.reminderText = '无提醒';
     }
+    if (decision.level !== LowScoreLevel.SEVERE || decision.expiresAt === 0 || this.lowScoreLatestScore >= 50) {
+      this.stopReminderFeedback();
+    }
+    this.scheduleReminderExpiry(decision.expiresAt);
   }
-  private scheduleHardReminderDismiss(): void {
-    this.cancelHardReminderTimer();
-    this.hardReminderTimer = setTimeout(() => {
-      this.clearHardReminder();
-    }, HARD_REMINDER_TIMEOUT_MS);
+  private lowScoreLevelText(level: LowScoreLevel): string {
+    if (level === LowScoreLevel.SEVERE) {
+      return '三级低分提醒';
+    }
+    if (level === LowScoreLevel.MEDIUM) {
+      return '二级低分提醒';
+    }
+    return '一级低分提醒';
   }
-  private notifyReminder(action: ReminderAction): void {
-    ReminderFeedbackService.notify(action, this.settings.vibration, this.settings.gentleSound);
+  private cancelReminderExpiry(): void {
+    this.reminderExpiryRunId += 1;
+    if (this.reminderExpiryTimer >= 0) {
+      clearTimeout(this.reminderExpiryTimer);
+      this.reminderExpiryTimer = -1;
+    }
+  }
+  private scheduleReminderExpiry(expiresAt: number): void {
+    this.cancelReminderExpiry();
+    if (expiresAt <= 0 || !this.isGuarding || !this.appForeground || this.isCalibrating) {
+      return;
+    }
+    const runId = this.guardRunId;
+    const pageRunId = this.pageRunId;
+    const expiryRunId = this.reminderExpiryRunId;
+    this.reminderExpiryTimer = setTimeout(() => {
+      if (expiryRunId !== this.reminderExpiryRunId || !this.isCurrentPageRun(pageRunId) ||
+        runId !== this.guardRunId || !this.appForeground || !this.isGuarding || this.isCalibrating) {
+        return;
+      }
+      this.reminderExpiryTimer = -1;
+      this.applyLowScoreDecision(this.lowScoreScheduler.refresh(this.lowScoreContext(), Date.now()));
+    }, Math.max(1, expiresAt - Date.now() + 1));
+  }
+  private cancelBreakMessage(): void {
+    this.breakMessageRunId += 1;
+    if (this.breakMessageTimer >= 0) {
+      clearTimeout(this.breakMessageTimer);
+      this.breakMessageTimer = -1;
+    }
+  }
+  private stopLowScoreReminders(): void {
+    this.lowScoreScheduler.stop();
+    this.resetReminderState('无提醒');
+  }
+  private async dispatchLowScoreFeedback(decision: LowScoreDecision, timestamp: number,
+    runId: number, pageRunId: number): Promise<void> {
+    if (!decision.vibrate) {
+      return;
+    }
+    await ReminderFeedbackService.pulsePair((): boolean => this.isCurrentPageRun(pageRunId) &&
+      runId === this.guardRunId && this.appForeground && this.isGuarding && !this.isCalibrating &&
+      this.settings.useCoreVision && this.settings.vibration && this.lowScoreDataValid &&
+      this.lowScoreLevel === LowScoreLevel.SEVERE && this.lowScoreLatestScore < 50 &&
+      Date.now() <= this.lowScoreExpiresAt, (): void => {
+      PHONE_VIBRATION_COOLDOWN.markStarted(Date.now());
+      this.markReminderFeedbackRecord(timestamp);
+    });
+  }
+  private markReminderFeedbackRecord(timestamp: number): void {
+    let changed = false;
+    const next = this.records.map((record: SessionRecord): SessionRecord => {
+      if (record.timestamp !== timestamp || record.action !== ReminderAction.NONE) {
+        return record;
+      }
+      changed = true;
+      return {
+        timestamp: record.timestamp,
+        score: record.score,
+        sitLevel: record.sitLevel,
+        chinLevel: record.chinLevel,
+        mouthLevel: record.mouthLevel,
+        action: ReminderAction.SOFT,
+        alertType: record.alertType
+      };
+    });
+    if (changed) {
+      this.records = next;
+      this.persistData();
+    }
   }
   private stopReminderFeedback(): void {
     ReminderFeedbackService.stop();
   }
-  private reminderCopy(action: ReminderAction, type: PostureAlertType): string {
-    const copy = alertTypeSubtitle(type);
-    if (action === ReminderAction.HARD) {
-      return copy + '，现在调整一下。';
+  private stopReminderPreview(): void {
+    if (this.reminderPreviewLevel !== LowScoreLevel.NORMAL) {
+      this.reminderPreviewRunId += 1;
+      this.reminderPreviewLevel = LowScoreLevel.NORMAL;
+      this.reminderPreviewMessage = '';
+      this.stopReminderFeedback();
     }
-    return copy;
+  }
+  private startReminderPreview(level: LowScoreLevel): void {
+    if (this.controlsLocked() || this.isGuarding || this.isCalibrating || !this.appForeground ||
+      this.activeTab !== 3 || !this.showDebugPanel) {
+      return;
+    }
+    this.stopReminderFeedback();
+    this.reminderPreviewRunId += 1;
+    this.reminderPreviewLevel = level;
+    this.reminderPreviewMessage = level >= LowScoreLevel.MEDIUM ? '请调整坐姿（隔离预览）' : '淡红色边缘光（隔离预览）';
+  }
+  private async previewReminderVibration(): Promise<void> {
+    if (this.reminderPreviewLevel !== LowScoreLevel.SEVERE || !this.settings.vibration ||
+      !this.appForeground || this.activeTab !== 3 || !this.showDebugPanel || this.isGuarding ||
+      this.controlsLocked() || this.isCalibrating) {
+      return;
+    }
+    if (!ReminderFeedbackService.isAvailable()) {
+      this.reminderPreviewMessage = ReminderFeedbackService.statusDetail() + '，视觉预览保留';
+      return;
+    }
+    if (!PHONE_VIBRATION_COOLDOWN.claim(Date.now())) {
+      this.reminderPreviewMessage = '振动冷却中；预览也遵守60秒间隔';
+      return;
+    }
+    const previewRunId = this.reminderPreviewRunId;
+    const pageRunId = this.pageRunId;
+    const started = await ReminderFeedbackService.pulsePair((): boolean =>
+      this.isCurrentPageRun(pageRunId) && previewRunId === this.reminderPreviewRunId && this.appForeground &&
+      this.activeTab === 3 && this.showDebugPanel && !this.isGuarding && !this.isCalibrating &&
+      !this.controlsLocked() && this.settings.vibration && this.reminderPreviewLevel === LowScoreLevel.SEVERE,
+      (): void => { PHONE_VIBRATION_COOLDOWN.markStarted(Date.now()); });
+    if (this.isCurrentPageRun(pageRunId) && previewRunId === this.reminderPreviewRunId && this.appForeground) {
+      this.reminderPreviewMessage = started ? '短震两下已请求；不写入提醒统计' :
+        ReminderFeedbackService.statusDetail() + '，视觉预览保留';
+    }
   }
   private clearSessionReport(): void {
     this.sessionReportTitle = '';
@@ -1787,6 +1967,9 @@ struct Index {
     if (this.isFinishedUiState()) {
       return '本次守护已结束';
     }
+    if (this.lowScoreLevel >= LowScoreLevel.MEDIUM && this.reminderMessage.length > 0) {
+      return this.reminderMessage;
+    }
     return this.summary;
   }
   private hasCurrentReading(): boolean {
@@ -1905,9 +2088,6 @@ struct Index {
         }.width('100%').height('100%').mode(NavigationMode.Stack)
           .title({ builder: this.Header(), height: 72 }, navigationTitleOptions(this.immersiveLevel))
           .hideBackButton(true).hideToolBar(true).backgroundColor(APP_BG)
-        if (this.showHardReminder) {
-          this.HardReminderOverlay()
-        }
         if (this.showClearDataConfirm) {
           this.ClearDataConfirmOverlay()
         }
@@ -1917,10 +2097,25 @@ struct Index {
         if (this.showCoreVisionConfirm) {
           this.CoreVisionConfirmOverlay()
         }
+        Stack({ alignContent: Alignment.TopStart }) {
+          LowScoreEdgeLight({ level: this.reminderPreviewLevel > LowScoreLevel.NORMAL ?
+            this.reminderPreviewLevel : this.lowScoreLevel,
+            effectEnabled: this.reminderPreviewLevel > LowScoreLevel.NORMAL || this.settings.lowScoreEdgeLight,
+            reduceMotion: this.settings.reduceReminderMotion,
+            active: this.appForeground && ((this.reminderPreviewLevel > LowScoreLevel.NORMAL &&
+              this.activeTab === 3 && this.showDebugPanel && !this.isGuarding && !this.isCalibrating) ||
+              (this.isGuarding && !this.isCalibrating && this.lowScoreDataValid)) })
+        }
+        .width(LayoutPolicy.matchParent).height(LayoutPolicy.matchParent)
+        .align(Alignment.TopStart)
+        .ignoreLayoutSafeArea([LayoutSafeAreaType.SYSTEM], [LayoutSafeAreaEdge.ALL])
+        .hitTestBehavior(HitTestMode.None).accessibilityLevel('no').id('low-score-glow-host')
       }
       .width('100%')
       .height('100%')
       .backgroundColor(APP_BG)
+      .expandSafeArea([SafeAreaType.SYSTEM, SafeAreaType.CUTOUT],
+        [SafeAreaEdge.TOP, SafeAreaEdge.BOTTOM, SafeAreaEdge.START, SafeAreaEdge.END])
     }
   }
   @Builder
@@ -1983,7 +2178,11 @@ struct Index {
           .fontSize(24)
           .fontWeight(FontWeight.Bold)
           .fontColor(INK)
-        if (this.activeTab === 0 || !this.settings.useCoreVision) {
+        if (this.lowScoreLevel >= LowScoreLevel.MEDIUM || this.reminderAlertType === PostureAlertType.ITEM_12) {
+          Text(this.reminderMessage).fontSize(12).fontColor(this.lowScoreLevel >= LowScoreLevel.MEDIUM ? RED : MUTED)
+            .maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis })
+            .accessibilityText(this.reminderMessage)
+        } else if (this.activeTab === 0 || !this.settings.useCoreVision) {
           Row({ space: 5 }) {
             SymbolGlyph($r('sys.symbol.checkmark_shield_fill'))
               .fontSize(12).fontColor([this.headerStatusColor()])
@@ -2054,49 +2253,6 @@ struct Index {
       [$r('app.color.score_gradient_middle'), 0.65], [$r('app.color.score_gradient_end'), 1]] })
     .borderRadius(26).border({ width: 1, color: BORDER_GLASS })
     .shadow({ radius: 12, color: '#08138654', offsetY: 4 })
-  }
-  @Builder
-  private HardReminderOverlay() {
-    Column() {
-      Column({ space: 14 }) {
-        this.AlertImageRow(this.reminderAlertType)
-        Text(alertTypeTitle(this.reminderAlertType))
-          .fontSize(24)
-          .fontWeight(FontWeight.Bold)
-          .fontColor(INK)
-        Text(this.reminderMessage.length > 0 ? this.reminderMessage : alertTypeSubtitle(this.reminderAlertType))
-          .fontSize(15)
-          .fontWeight(FontWeight.Bold)
-          .fontColor(MUTED)
-          .textAlign(TextAlign.Center)
-          .lineHeight(22)
-          .maxLines(3)
-        Button('知道了')
-          .height(46)
-          .width('100%')
-          .fontSize(16)
-          .fontWeight(FontWeight.Bold)
-          .fontColor('#FFFFFF')
-          .backgroundColor(ACTION_RED)
-          .borderRadius(20)
-          .onClick(() => {
-            this.clearHardReminder();
-          })
-      }
-      .width('82%')
-      .padding(22)
-      .alignItems(HorizontalAlign.Center)
-      .backgroundColor(GLASS)
-      .borderRadius(26)
-      .border({ width: 1, color: BORDER_GLASS })
-      .shadow({ radius: 28, color: '#33000000', offsetY: 10 })
-    }
-    .width('100%')
-    .height('100%')
-    .justifyContent(FlexAlign.Center)
-    .alignItems(HorizontalAlign.Center)
-    .backgroundColor('#CC171B1A')
-    .zIndex(10)
   }
   @Builder
   private AlertImageRow(type: PostureAlertType) {
@@ -2671,6 +2827,9 @@ struct Index {
   private switchTab(index: number): void {
     if (this.controlsLocked()) {
       return;
+    }
+    if (index !== 3) {
+      this.stopReminderPreview();
     }
     this.activeTab = index;
     this.pageScrollers[index].scrollTo({ xOffset: 0, yOffset: 0 });
@@ -3583,7 +3742,7 @@ struct Index {
           .enabled(!this.controlsLocked()).opacity(this.actionOpacity())
           .onClick(() => { this.requestClearData(); })
       }.width('100%').padding({ top: 14, bottom: 14 })
-      Text('坐直了 0.2.7').fontSize(11).fontColor(MUTED).margin({ top: 12 })
+      Text('坐直了 0.2.8').fontSize(11).fontColor(MUTED).margin({ top: 12 })
     }
     .width('100%')
   }
@@ -3843,7 +4002,9 @@ struct Index {
   private PrivacyPanel() {
     Column({ space: 10 }) {
       this.SettingsSectionTitle('隐私与提醒', $r('sys.symbol.lock_shield_fill'), GREEN)
-      this.SoundSwitchRow()
+      this.LowScoreEdgeSwitchRow()
+      Divider().color(LINE_SOFT)
+      this.ReduceReminderMotionSwitchRow()
       Divider().color(LINE_SOFT)
       this.VibrationSwitchRow()
       Divider().color(LINE_SOFT)
@@ -3919,26 +4080,44 @@ struct Index {
     .border({ width: 1, color: LINE_SOFT })
   }
   @Builder
-  private SoundSwitchRow() {
+  private LowScoreEdgeSwitchRow() {
     Row() {
-      Text('轻提示音')
+      Text('低分边缘光')
         .fontSize(16)
         .fontWeight(FontWeight.Regular)
         .fontColor(INK)
       Blank()
-      Toggle({ type: ToggleType.Switch, isOn: this.settings.gentleSound })
+      Toggle({ type: ToggleType.Switch, isOn: this.settings.lowScoreEdgeLight })
+        .id('low-score-edge-toggle')
         .selectedColor(GREEN)
         .enabled(!this.controlsLocked())
-        .accessibilityText('轻提示音')
+        .accessibilityText('低分边缘光')
         .onChange((value: boolean) => {
-          if (value !== this.settings.gentleSound) {
-            this.toggleSound();
+          if (value !== this.settings.lowScoreEdgeLight) {
+            this.toggleLowScoreEdgeLight();
           }
         })
     }
     .height(48)
     .width('100%')
     .padding({ right: 2 })
+  }
+  @Builder
+  private ReduceReminderMotionSwitchRow() {
+    Row() {
+      Column({ space: 3 }) {
+        Text('减少动态效果').fontSize(16).fontColor(INK)
+        Text('使用静态细边框，低分提醒无声音').fontSize(12).fontColor(MUTED)
+      }.alignItems(HorizontalAlign.Start).layoutWeight(1)
+      Toggle({ type: ToggleType.Switch, isOn: this.settings.reduceReminderMotion })
+        .id('low-score-motion-toggle').selectedColor(GREEN).enabled(!this.controlsLocked())
+        .accessibilityText('减少动态效果')
+        .onChange((value: boolean) => {
+          if (value !== this.settings.reduceReminderMotion) {
+            this.toggleReduceReminderMotion();
+          }
+        })
+    }.height(56).width('100%').padding({ right: 2 })
   }
   @Builder
   private VibrationSwitchRow() {
@@ -3949,6 +4128,7 @@ struct Index {
         .fontColor(INK)
       Blank()
       Toggle({ type: ToggleType.Switch, isOn: this.settings.vibration })
+        .id('low-score-vibration-toggle')
         .selectedColor(GREEN)
         .enabled(!this.controlsLocked())
         .accessibilityText('短振动')
@@ -3961,6 +4141,44 @@ struct Index {
     .height(48)
     .width('100%')
     .padding({ right: 2 })
+  }
+  @Builder
+  private ReminderPreviewPanel() {
+    Column({ space: 10 }) {
+      Text('低分提醒预览').fontSize(16).fontWeight(FontWeight.Medium).fontColor(INK).width('100%')
+      Text('全屏隔离预览：光效从屏幕四周向中心渐隐；不启动相机，不修改分数、基线或统计。')
+        .fontSize(12).fontColor(MUTED).lineHeight(18).width('100%')
+      Row({ space: 6 }) {
+        this.ReminderPreviewButton('一级', LowScoreLevel.LIGHT)
+        this.ReminderPreviewButton('二级', LowScoreLevel.MEDIUM)
+        this.ReminderPreviewButton('三级', LowScoreLevel.SEVERE)
+      }.width('100%')
+      if (this.reminderPreviewLevel !== LowScoreLevel.NORMAL) {
+        Column({ space: 10 }) {
+            Text(this.lowScoreLevelText(this.reminderPreviewLevel)).fontSize(14).fontColor(INK)
+            Text(this.reminderPreviewMessage).fontSize(12).fontColor(MUTED).textAlign(TextAlign.Center)
+              .maxLines(3).padding({ left: 22, right: 22 })
+            Row({ space: 8 }) {
+              if (this.reminderPreviewLevel === LowScoreLevel.SEVERE) {
+                Button('试振动').id('low-score-preview-vibrate').height(36).fontSize(13)
+                  .fontColor(GREEN_DEEP).backgroundColor(GREEN_SOFT)
+                  .enabled(this.settings.vibration && !this.controlsLocked())
+                  .onClick(() => { this.previewReminderVibration(); })
+              }
+              Button('关闭预览').id('low-score-preview-stop').height(36).fontSize(13)
+                .fontColor(INK).backgroundColor(GLASS_SOFT).onClick(() => { this.stopReminderPreview(); })
+            }
+        }.width('100%').padding({ top: 20, bottom: 20 })
+      }
+    }.width('100%').padding({ top: 8, bottom: 14 }).border({ width: { bottom: 1 }, color: LINE_SOFT })
+  }
+  @Builder
+  private ReminderPreviewButton(label: string, level: LowScoreLevel) {
+    Button(label).id('low-score-preview-' + level.toString()).height(38).layoutWeight(1).fontSize(13)
+      .fontColor(this.reminderPreviewLevel === level ? RED : INK)
+      .backgroundColor(this.reminderPreviewLevel === level ? RED_SOFT : GLASS_SOFT)
+      .enabled(!this.controlsLocked() && !this.isGuarding && !this.isCalibrating)
+      .accessibilityText(label + '低分提醒预览').onClick(() => { this.startReminderPreview(level); })
   }
   @Builder
   private DeveloperDebugPanel() {
@@ -3991,8 +4209,12 @@ struct Index {
       .accessibilityText(this.showDebugPanel ? '收起开发者工具' : '展开开发者工具')
       .onClick(() => {
         this.showDebugPanel = !this.showDebugPanel;
+        if (!this.showDebugPanel) {
+          this.stopReminderPreview();
+        }
       })
       if (this.showDebugPanel) {
+        this.ReminderPreviewPanel()
         SkeletonDebugPanel({ active: this.activeTab === 3 && this.appForeground,
           realSource: this.settings.useCoreVision, guarding: this.isGuarding,
           locked: this.controlsLocked(), intervalMs: this.settings.profile.sampleIntervalMs,

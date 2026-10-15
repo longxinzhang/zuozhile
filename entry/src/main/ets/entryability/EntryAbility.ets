@@ -11,6 +11,9 @@ const TAG = 'Zuozhile';
 
 export default class EntryAbility extends UIAbility {
   private mainWindow?: window.Window;
+  private windowSizeListener: (size: window.Size) => void = (size: window.Size): void => {
+    this.publishScreenSize(size.width, size.height);
+  };
 
   onCreate(want: Want, launchParam: AbilityConstant.LaunchParam): void {
     AppStorage.setOrCreate('appForeground', true);
@@ -40,6 +43,16 @@ export default class EntryAbility extends UIAbility {
     try {
       const mainWindow = windowStage.getMainWindowSync();
       this.mainWindow = mainWindow;
+      mainWindow.setWindowLayoutFullScreen(true).then((): void => {
+        if (this.mainWindow !== mainWindow) {
+          return;
+        }
+        const rect = mainWindow.getWindowProperties().windowRect;
+        this.publishScreenSize(rect.width, rect.height);
+      }).catch((): void => { hilog.warn(DOMAIN, TAG, 'Full-screen glow layout unavailable'); });
+      mainWindow.on('windowSizeChange', this.windowSizeListener);
+      const rect = mainWindow.getWindowProperties().windowRect;
+      this.publishScreenSize(rect.width, rect.height);
       GuardWindowService.setMainWindow(mainWindow);
       this.updateSystemBars(this.context.config.colorMode);
     } catch (error) {
@@ -55,6 +68,11 @@ export default class EntryAbility extends UIAbility {
   }
 
   onWindowStageDestroy(): void {
+    try {
+      this.mainWindow?.off('windowSizeChange', this.windowSizeListener);
+    } catch (error) {
+      hilog.warn(DOMAIN, TAG, 'Window size listener cleanup failed');
+    }
     this.mainWindow = undefined;
     PostureFloatService.close();
     hilog.info(DOMAIN, TAG, 'Ability onWindowStageDestroy');
@@ -78,12 +96,16 @@ export default class EntryAbility extends UIAbility {
 
   private updateSystemBars(mode?: ConfigurationConstant.ColorMode): void {
     const dark = (mode ?? this.context.config.colorMode) === ConfigurationConstant.ColorMode.COLOR_MODE_DARK;
+    AppStorage.setOrCreate('appColorMode', dark ? 0 : 1);
     // System bar APIs take resolved strings, not ArkUI color resources.
-    const background = dark ? '#111315' : '#F4F5F7';
     const foreground = dark ? '#F0F2F4' : '#1D2329';
     this.mainWindow?.setWindowSystemBarProperties({
-      statusBarColor: background, navigationBarColor: background,
+      statusBarColor: '#00000000', navigationBarColor: '#00000000',
       statusBarContentColor: foreground, navigationBarContentColor: foreground
     }).catch(() => { hilog.warn(DOMAIN, TAG, 'System bar appearance update failed'); });
+  }
+  private publishScreenSize(width: number, height: number): void {
+    AppStorage.setOrCreate('glowWindowWidthPx', width);
+    AppStorage.setOrCreate('glowWindowHeightPx', height);
   }
 }

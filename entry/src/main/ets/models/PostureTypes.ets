@@ -69,10 +69,17 @@ export interface FaceFrame {
   rect?: FaceRect;
 }
 
+export interface ReminderSampleEvidence {
+  faceCount: number;
+  skeletonCount: number;
+  associationAmbiguous: boolean;
+}
+
 export interface PostureSample {
   timestamp: number;
   skeleton: SkeletonFrame;
   face: FaceFrame;
+  reminderEvidence?: ReminderSampleEvidence;
 }
 
 export interface CalibrationProfile {
@@ -131,6 +138,8 @@ export interface UserSettings {
   privacyMode: boolean;
   gentleSound: boolean;
   vibration: boolean;
+  lowScoreEdgeLight: boolean;
+  reduceReminderMotion: boolean;
 }
 
 export interface AppData {
@@ -182,7 +191,9 @@ export function createDefaultSettings(): UserSettings {
     useCoreVision: true,
     privacyMode: true,
     gentleSound: false,
-    vibration: true
+    vibration: true,
+    lowScoreEdgeLight: true,
+    reduceReminderMotion: false
   };
 }
 

@@ -54,6 +54,9 @@ export class ARPostureSource implements PostureSource {
       });
       await pixelMap.rotate(this.rotation);
       const sample = await this.detector.detect(pixelMap);
+      if (sample.reminderEvidence !== undefined && frame.faceCount > 1) {
+        sample.reminderEvidence.associationAmbiguous = true;
+      }
       // Both detectors consume the same camera frame. Ambiguous faces never contribute a mouth score.
       sample.face.jawOpen = frame.jawOpen;
       sample.face.lipGapRatio = frame.lipGapRatio;

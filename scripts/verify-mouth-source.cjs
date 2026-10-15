@@ -4,8 +4,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
 const root = path.resolve(__dirname, '..');
-const sdk = process.env.DEVECO_HOME || '/Applications/DevEco-Studio.app';
-const ts = require(path.join(sdk, 'Contents/sdk/default/openharmony/ets/build-tools/ets-loader/node_modules/typescript'));
+const ts = require('./deveco-sdk.cjs').typescript;
 const file = path.join(root, 'entry/src/main/ets/services/ARPostureSource.ets');
 const code = ts.transpileModule(fs.readFileSync(file, 'utf8'), {
   compilerOptions: { target: ts.ScriptTarget.ES2020, module: ts.ModuleKind.CommonJS }
@@ -50,7 +49,9 @@ function setup() {
         calls.push('detect');
         state.detectedPixel = pixelMap.firstPixel;
         if (state.detectorError) throw new Error('inference failed');
-        return { timestamp: 1234, skeleton: {}, face: { confidence: state.confidence,
+        return { timestamp: 1234, skeleton: {}, reminderEvidence: {
+          faceCount: state.coreFaces, skeletonCount: 1, associationAmbiguous: state.coreFaces > 1 },
+          face: { confidence: state.confidence,
           yaw: state.yaw, pitch: state.pitch, roll: 0, mouthOpenRatio: 0, mouthAvailable: false } };
       }
       faceCount() { return state.coreFaces; }
@@ -85,6 +86,7 @@ async function main() {
     Object.assign(state, { nativeFaces: 1, coreFaces: 1, confidence: .99, yaw: 0, pitch: 0, jaw: .6, gap: .08 }, patch);
     sample = await source.sample({});
     assert.equal(sample.face.mouthAvailable, false, JSON.stringify(patch));
+    assert.equal(sample.reminderEvidence.associationAmbiguous, state.nativeFaces > 1 || state.coreFaces > 1);
   }
   state.captureError = true;
   await assert.rejects(source.sample({}), /camera error/);
