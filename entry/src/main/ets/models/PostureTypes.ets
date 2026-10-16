@@ -132,6 +132,11 @@ export interface SessionRecord {
   alertType: PostureAlertType;
 }
 
+export enum WearableReminderRoute {
+  WEAR_ENGINE = 'wear-engine',
+  NOTIFICATION_SYNC = 'notification-sync'
+}
+
 export interface UserSettings {
   profile: CalibrationProfile;
   useCoreVision: boolean;
@@ -140,6 +145,8 @@ export interface UserSettings {
   vibration: boolean;
   lowScoreEdgeLight: boolean;
   reduceReminderMotion: boolean;
+  wearableReminder: boolean;
+  wearableReminderRoute: WearableReminderRoute;
 }
 
 export interface AppData {
@@ -193,7 +200,9 @@ export function createDefaultSettings(): UserSettings {
     gentleSound: false,
     vibration: true,
     lowScoreEdgeLight: true,
-    reduceReminderMotion: false
+    reduceReminderMotion: false,
+    wearableReminder: false,
+    wearableReminderRoute: WearableReminderRoute.NOTIFICATION_SYNC
   };
 }
 

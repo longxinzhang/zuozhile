@@ -128,6 +128,7 @@ async function main() {
   const warnings = [];
   const floatCalls = [];
   const guardWindows = [];
+  const wearableCalls = [];
   const ability = load('entryability/EntryAbility', {
     '@kit.AbilityKit': { UIAbility: class {}, ConfigurationConstant: {
       ColorMode: { COLOR_MODE_DARK: 0, COLOR_MODE_LIGHT: 1, COLOR_MODE_NOT_SET: -1 }
@@ -140,6 +141,10 @@ async function main() {
     } },
     '../services/GuardWindowService': { GuardWindowService: { setMainWindow: window => guardWindows.push(window) } },
     '../services/ARFaceCapability': { supportsFaceTracking: () => false },
+    '../services/WearableReminderService': { WearableReminderService: {
+      controller: { suspend: () => wearableCalls.push('suspend') },
+      destroy: async () => { wearableCalls.push('destroy'); }
+    } },
     '../services/AppearanceStore': { AppearanceStore: { load: async () => ({ level: 3, isHealthy: true }) } }
   }, { AppStorage: { setOrCreate(key, value) { storage.set(key, value); writes.push([key, value]); } } });
   const instance = new ability.default();
@@ -174,6 +179,7 @@ async function main() {
   instance.onBackground();
   assert.equal(storage.get('appForeground'), false);
   assert.deepEqual(floatCalls.at(-1), ['background']);
+  assert.deepEqual(wearableCalls, ['suspend']);
   instance.mainWindow = undefined;
   const noWindowCalls = calls.length;
   instance.onConfigurationUpdate({ colorMode: 1 });
@@ -184,6 +190,7 @@ async function main() {
   assert.deepEqual(colorModes, [-1]);
   assert.equal(storage.get('appearanceReady'), true);
   assert.equal(storage.get('immersiveLevel'), 3);
+  instance.onDestroy(); assert.deepEqual(wearableCalls, ['suspend', 'destroy']);
   pass('transparent status/navigation bars keep themed foregrounds and publish appColorMode on updates/foreground');
 
   function windowFixture(options = {}) {
@@ -254,6 +261,7 @@ async function main() {
   await screen.resolve(2760, 1320);
   checkSize(2760, 1320);
   screen.subject.onWindowStageDestroy();
+  assert.equal(wearableCalls.at(-1), 'suspend');
   assert.equal(screen.removals.length, 1);
   assert.equal(screen.removals[0][0], 'windowSizeChange');
   assert.equal(screen.removals[0][1], screen.registrations[0][1]);

@@ -5,6 +5,7 @@ import { PostureFloatService } from '../services/PostureFloatService';
 import { GuardWindowService } from '../services/GuardWindowService';
 import { supportsFaceTracking } from '../services/ARFaceCapability';
 import { AppearanceStore } from '../services/AppearanceStore';
+import { WearableReminderService } from '../services/WearableReminderService';
 
 const DOMAIN = 0x0000;
 const TAG = 'Zuozhile';
@@ -35,6 +36,7 @@ export default class EntryAbility extends UIAbility {
   }
 
   onDestroy(): void {
+    WearableReminderService.destroy();
     hilog.info(DOMAIN, TAG, 'Ability onDestroy');
   }
 
@@ -68,6 +70,7 @@ export default class EntryAbility extends UIAbility {
   }
 
   onWindowStageDestroy(): void {
+    WearableReminderService.controller.suspend();
     try {
       this.mainWindow?.off('windowSizeChange', this.windowSizeListener);
     } catch (error) {
@@ -85,6 +88,7 @@ export default class EntryAbility extends UIAbility {
   }
 
   onBackground(): void {
+    WearableReminderService.controller.suspend();
     AppStorage.setOrCreate('appForeground', false);
     PostureFloatService.background();
     hilog.info(DOMAIN, TAG, 'Ability onBackground');

@@ -22,6 +22,7 @@ import {
   STANDARD_SENSITIVITY,
   TodayStats,
   UserSettings,
+  WearableReminderRoute,
   createDefaultData,
   createDefaultSettings
 } from '../models/PostureTypes';
@@ -29,6 +30,10 @@ import { PostureSessionStore } from '../services/PostureSessionStore';
 import { SkeletonDebugFeed } from '../services/SkeletonDebugFeed';
 import { SkeletonDebugPanel } from '../components/SkeletonDebugPanel';
 import { LowScoreEdgeLight } from '../components/LowScoreEdgeLight';
+import { WearableReminderPanel } from '../components/WearableReminderPanel';
+import { NotificationSyncTestPanel } from '../components/NotificationSyncTestPanel';
+import { WearableRuntime, WearableTestConfirmation, WearableViewState } from '../models/WearableReminderPolicy';
+import { WearableReminderService } from '../services/WearableReminderService';
 import { AppearanceStore } from '../services/AppearanceStore';
 import { normalizeImmersiveLevel } from '../theme/AppearanceOptions';
 import { BaselineTile, SmallCounter, StatTile } from '../components/StatusTiles';
@@ -168,10 +173,11 @@ struct Index {
   @State private activeDebugTab: number = 0;
   @State private showDebugPanel: boolean = false;
   @State @Watch('syncFloatingState') private isGuarding: boolean = false;
-  @State private isStartingGuard: boolean = false;
-  @State private isStoppingGuard: boolean = false;
-  @State private isManualOperation: boolean = false;
-  @State private settings: UserSettings = createDefaultSettings();
+  @State @Watch('syncWearableRuntime') private isStartingGuard: boolean = false;
+  @State @Watch('syncWearableRuntime') private isStoppingGuard: boolean = false;
+  @State @Watch('syncWearableRuntime') private isManualOperation: boolean = false;
+  @State @Watch('onWearableSettingsChanged') private settings: UserSettings = createDefaultSettings();
+  @State private wearableState: WearableViewState = new WearableViewState();
   @State private records: SessionRecord[] = [];
   @State @Watch('syncFloatingState') private score: number = 92;
   @State @Watch('syncFloatingState') private summary: string = '坐姿在线';
@@ -198,7 +204,7 @@ struct Index {
   @State private showResetCalibrationConfirm: boolean = false;
   @State private showCoreVisionConfirm: boolean = false;
   @State private calibrationProgressText: string = '';
-  @State private isCalibrating: boolean = false;
+  @State @Watch('syncWearableRuntime') private isCalibrating: boolean = false;
   @State private calibrationCancelled: boolean = false;
   @StorageLink('appForeground') @Watch('onForegroundChanged') private appForeground: boolean = true;
   @StorageProp('floatVisible') private floatVisible: boolean = false;
@@ -241,6 +247,8 @@ struct Index {
   private lowScoreLatestScore: number = 100;
   private guardRunId: number = 0;
   private pageRunId: number = 0;
+  private wearablePageVisible: boolean = false;
+  private wearablePageId: number = 0;
   private storageOperationId: number = 0;
   private guardSessionStartedAt: number = 0;
   private isSampling: boolean = false;
@@ -258,6 +266,15 @@ struct Index {
   private sourceDisposal?: Promise<void>;
   aboutToAppear(): void {
     this.pageRunId += 1;
+    this.wearablePageVisible = true;
+    this.wearablePageId = WearableReminderService.beginPage();
+    const pageRunId = this.pageRunId;
+    WearableReminderService.controller.observe((state: WearableViewState): void => {
+      if (this.wearablePageVisible && this.isCurrentPageRun(pageRunId)) {
+        this.wearableState = state;
+      }
+    });
+    this.initializeWearable(pageRunId);
     if (!this.loaded) {
       this.loadData(this.pageRunId);
     } else if (!this.isGuarding) {
@@ -267,12 +284,15 @@ struct Index {
   }
   aboutToDisappear(): void {
     this.pageRunId += 1;
+    this.wearablePageVisible = false;
+    WearableReminderService.destroy(this.wearablePageId);
     this.calibrationCancelled = true;
     this.stopReminderPreview();
     this.stopLowScoreReminders();
     this.stopGuard(false);
   }
   private onForegroundChanged(): void {
+    this.syncWearableRuntime();
     if (!this.appForeground) {
       this.calibrationCancelled = true;
       this.stopReminderPreview();
@@ -292,6 +312,105 @@ struct Index {
     AppStorage.setOrCreate('floatMouthLabel', this.mouthLabel);
     AppStorage.setOrCreate('floatTimestamp', this.hasCurrentReading() && !this.isDetectionErrorUiState() &&
       !this.isUnrecognizedUiState() && this.lastSample ? this.lastSample.timestamp : 0);
+    this.syncWearableRuntime();
+  }
+  private async initializeWearable(pageRunId: number): Promise<void> {
+    const context = this.abilityContext();
+    if (context === undefined) {
+      return;
+    }
+    try {
+      await WearableReminderService.initialize(context, this.wearablePageId);
+      if (!this.wearablePageVisible || !this.isCurrentPageRun(pageRunId)) {
+        return;
+      }
+      this.onWearableSettingsChanged();
+      if (this.loaded && this.settings.wearableReminder &&
+        this.settings.wearableReminderRoute === WearableReminderRoute.NOTIFICATION_SYNC) {
+        WearableReminderService.controller.refresh();
+      }
+    } catch (error) {
+      if (this.wearablePageVisible && this.isCurrentPageRun(pageRunId)) {
+        this.wearableState = new WearableViewState();
+        this.wearableState.detail = '腕上通道初始化失败；手机守护不受影响';
+      }
+    }
+  }
+  private syncWearableRuntime(): void {
+    if (!WearableReminderService.isCurrentPage(this.wearablePageId)) {
+      return;
+    }
+    const runtime = new WearableRuntime();
+    runtime.foreground = this.wearablePageVisible && this.appForeground;
+    runtime.guarding = this.isGuarding;
+    runtime.calibrating = this.isCalibrating || this.isStartingGuard || this.isStoppingGuard;
+    runtime.realSource = this.settings.useCoreVision && this.postureSource.status().isLive;
+    runtime.testAllowed = this.activeTab === 3 && !this.isGuarding && !this.isCalibrating &&
+      !this.controlsLocked() && !this.isSampling;
+    runtime.sessionId = this.guardRunId;
+    runtime.pageId = this.wearablePageId;
+    runtime.score = this.lowScoreLatestScore;
+    runtime.level = this.lowScoreLevel;
+    runtime.expiresAt = this.lowScoreExpiresAt;
+    WearableReminderService.controller.update(runtime);
+  }
+  private onWearableSettingsChanged(): void {
+    if (!WearableReminderService.isCurrentPage(this.wearablePageId)) {
+      return;
+    }
+    WearableReminderService.controller.setRoute(this.settings.wearableReminderRoute);
+    WearableReminderService.controller.setEnabled(this.settings.wearableReminder);
+    this.syncWearableRuntime();
+  }
+  private toggleWearableReminder(enabled: boolean): void {
+    if (!this.loaded || this.controlsLocked() || enabled === this.settings.wearableReminder) {
+      return;
+    }
+    const next = this.copySettings(this.settings);
+    next.wearableReminder = enabled;
+    this.settings = next;
+    this.onWearableSettingsChanged();
+    this.persistData();
+    if (enabled) {
+      WearableReminderService.controller.refresh();
+    }
+  }
+  private refreshWearableDevices(): void {
+    if (this.controlsLocked() || !this.appForeground) {
+      return;
+    }
+    this.syncWearableRuntime();
+    WearableReminderService.controller.refresh();
+  }
+  private toggleWearableRoute(route: WearableReminderRoute): void {
+    if (!this.loaded || this.controlsLocked() || this.isGuarding || this.isCalibrating ||
+      !this.appForeground || WearableReminderService.controller.state().busy ||
+      route === this.settings.wearableReminderRoute) {
+      return;
+    }
+    const next = this.copySettings(this.settings);
+    next.wearableReminderRoute = route;
+    this.settings = next;
+    this.onWearableSettingsChanged();
+    this.persistData();
+    if (next.wearableReminder) {
+      WearableReminderService.controller.refresh();
+    }
+  }
+  private prepareNotificationSync(): void {
+    if (!this.loaded || this.controlsLocked() || this.isSampling || this.isGuarding || this.isCalibrating ||
+      !this.appForeground || this.activeTab !== 3) {
+      return;
+    }
+    this.syncWearableRuntime();
+    WearableReminderService.controller.prepareNotificationSync();
+  }
+  private testWearableReminder(): void {
+    if (this.controlsLocked() || this.isSampling || this.isGuarding || this.activeTab !== 3) {
+      return;
+    }
+    this.syncWearableRuntime();
+    WearableReminderService.controller.test();
   }
   private async toggleFloatingWindow(): Promise<void> {
     if (this.floatBusy || this.controlsLocked()) {
@@ -332,6 +451,11 @@ struct Index {
       this.setStorageStatus('本地存储不可用', false);
     }
     this.loaded = true;
+    this.onWearableSettingsChanged();
+    if (this.settings.wearableReminder &&
+      this.settings.wearableReminderRoute === WearableReminderRoute.NOTIFICATION_SYNC) {
+      WearableReminderService.controller.refresh();
+    }
   }
   private applyData(data: AppData): void {
     this.settings = this.copySettings(data.settings);
@@ -363,7 +487,9 @@ struct Index {
       gentleSound: settings.gentleSound,
       vibration: settings.vibration,
       lowScoreEdgeLight: settings.lowScoreEdgeLight,
-      reduceReminderMotion: settings.reduceReminderMotion
+      reduceReminderMotion: settings.reduceReminderMotion,
+      wearableReminder: settings.wearableReminder,
+      wearableReminderRoute: settings.wearableReminderRoute
     };
   }
   private persistData(): void {
@@ -1089,6 +1215,8 @@ struct Index {
       }
       const defaults = createDefaultData();
       this.settings = this.copySettings(defaults.settings);
+      this.onWearableSettingsChanged();
+      WearableReminderService.controller.clearDiagnostics();
       this.records = [];
       this.clearSessionReport();
       this.resetDisplayStability();
@@ -1296,6 +1424,7 @@ struct Index {
     this.lowScoreExpiresAt = 0;
     this.reminderText = text;
     this.clearReminderDisplay();
+    this.syncWearableRuntime();
   }
   private clearReminderDisplay(): void {
     this.reminderAction = ReminderAction.NONE;
@@ -1379,6 +1508,7 @@ struct Index {
       this.stopReminderFeedback();
     }
     this.scheduleReminderExpiry(decision.expiresAt);
+    this.syncWearableRuntime();
   }
   private lowScoreLevelText(level: LowScoreLevel): string {
     if (level === LowScoreLevel.SEVERE) {
@@ -1426,6 +1556,10 @@ struct Index {
   }
   private async dispatchLowScoreFeedback(decision: LowScoreDecision, timestamp: number,
     runId: number, pageRunId: number): Promise<void> {
+    if (this.isCurrentPageRun(pageRunId) && runId === this.guardRunId &&
+      WearableReminderService.isCurrentPage(this.wearablePageId)) {
+      WearableReminderService.controller.submit(decision, this.lowScoreLatestScore, timestamp);
+    }
     if (!decision.vibrate) {
       return;
     }
@@ -2832,6 +2966,7 @@ struct Index {
       this.stopReminderPreview();
     }
     this.activeTab = index;
+    this.syncWearableRuntime();
     this.pageScrollers[index].scrollTo({ xOffset: 0, yOffset: 0 });
   }
   private primaryPostureAlert(): PostureAlertType {
@@ -3733,6 +3868,18 @@ struct Index {
       this.CalibrationPanel()
       this.SamplingPanel()
       this.PrivacyPanel()
+      WearableReminderPanel({ reminderEnabled: this.settings.wearableReminder,
+        reminderRoute: this.settings.wearableReminderRoute,
+        locked: !this.loaded || this.controlsLocked() || this.isCalibrating,
+        guarding: this.isGuarding, state: this.wearableState,
+        onToggle: (enabled: boolean): void => { this.toggleWearableReminder(enabled); },
+        onRoute: (route: WearableReminderRoute): void => { this.toggleWearableRoute(route); },
+        onPrepareNotification: (): void => { this.prepareNotificationSync(); },
+        onRefresh: (): void => { this.refreshWearableDevices(); },
+        onSelect: (routeId: string): void => { WearableReminderService.controller.select(routeId); },
+        onTest: (): void => { this.testWearableReminder(); },
+        onConfirm: (result: WearableTestConfirmation): void => { WearableReminderService.controller.confirm(result); },
+        onClear: (): void => { WearableReminderService.controller.clearDiagnostics(); } })
       this.DeveloperDebugPanel()
       Row() {
         Text('本机数据').fontSize(15).fontColor(INK).layoutWeight(1)
@@ -3742,7 +3889,7 @@ struct Index {
           .enabled(!this.controlsLocked()).opacity(this.actionOpacity())
           .onClick(() => { this.requestClearData(); })
       }.width('100%').padding({ top: 14, bottom: 14 })
-      Text('坐直了 0.2.8').fontSize(11).fontColor(MUTED).margin({ top: 12 })
+      Text('坐直了 0.2.10').fontSize(11).fontColor(MUTED).margin({ top: 12 })
     }
     .width('100%')
   }
@@ -4215,6 +4362,11 @@ struct Index {
       })
       if (this.showDebugPanel) {
         this.ReminderPreviewPanel()
+        NotificationSyncTestPanel({ active: this.activeTab === 3, foreground: this.appForeground,
+          locked: !this.loaded || this.controlsLocked() || this.isGuarding || this.isCalibrating || this.isSampling,
+          contextProvider: (): common.UIAbilityContext | undefined => this.abilityContext(),
+          testAllowed: (): boolean => this.loaded && this.activeTab === 3 && !this.controlsLocked() &&
+            !this.isGuarding && !this.isCalibrating && !this.isSampling })
         SkeletonDebugPanel({ active: this.activeTab === 3 && this.appForeground,
           realSource: this.settings.useCoreVision, guarding: this.isGuarding,
           locked: this.controlsLocked(), intervalMs: this.settings.profile.sampleIntervalMs,

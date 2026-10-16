@@ -9,6 +9,8 @@ const root = path.resolve(__dirname, '..');
 const sourceRoot = 'entry/src/main/ets/';
 const baseline = process.argv[2] || 'd73d591';
 const compilerOptions = { target: ts.ScriptTarget.ES2020, module: ts.ModuleKind.CommonJS };
+let checks = 0;
+const pass = name => { checks++; console.log('PASS: ' + name); };
 function read(file, previous = false) {
   return previous ? execFileSync('git', ['show', `${baseline}:${file}`], { cwd: root, encoding: 'utf8' })
     : fs.readFileSync(path.join(root, file), 'utf8');
@@ -36,6 +38,7 @@ function load(file, mocks = {}, previous = false, cache = new Map()) {
 }
 const types = load('models/PostureTypes');
 const rules = load('models/LowScoreReminder');
+const { WearableRuntime } = load('models/WearableReminderPolicy');
 const normalize = value => JSON.parse(JSON.stringify(value));
 for (const name of ['models/PostureEvaluator.ets', 'models/PostureCalibration.ets', 'models/CalibrationCapture.ets',
   'models/SessionStats.ets', 'models/ReminderEngine.ets', 'services/CoreVisionPostureSource.ets',
@@ -62,7 +65,7 @@ for (const old of getMembers(oldDetectorAst)) {
   const current = getMembers(detectorAst).find(node => node.name?.getText(detectorAst) === old.name.getText(oldDetectorAst));
   assert.equal(current.getText(detectorAst), old.getText(oldDetectorAst), 'Detector selection/conversion changed');
 }
-console.log('PASS: scoring, calibration, sensitivity, interval, camera pipeline, native inference and statistics untouched');
+pass('scoring, calibration, sensitivity, interval, camera pipeline, native inference and statistics untouched');
 
 const newEvaluate = load('models/PostureEvaluator').evaluatePosture;
 const oldEvaluate = load('models/PostureEvaluator', {}, true).evaluatePosture;
@@ -82,7 +85,7 @@ for (const sensitivity of [types.STANDARD_SENSITIVITY, types.SENSITIVE_SENSITIVI
     }
   }
 }
-console.log(`PASS: ${comparisons} scoring comparisons match ${baseline}`);
+pass(`${comparisons} scoring comparisons match ${baseline}`);
 
 const pageNames = ['captureFrame', 'applyLowScoreDecision', 'lowScoreContext', 'lowScoreLevelText',
   'scheduleReminderExpiry', 'cancelReminderExpiry', 'cancelBreakMessage', 'dispatchLowScoreFeedback',
@@ -90,19 +93,35 @@ const pageNames = ['captureFrame', 'applyLowScoreDecision', 'lowScoreContext', '
   'clearReminderDisplay', 'stopReminderPreview', 'startReminderPreview', 'previewReminderVibration',
   'isCurrentPageRun', 'controlsLocked', 'toggleLowScoreEdgeLight', 'toggleReduceReminderMotion', 'toggleVibration',
   'onForegroundChanged', 'aboutToDisappear', 'startGuard', 'stopGuard', 'runCalibration',
-  'releasePostureSource', 'copySettings', 'setCalibrationProgress'];
+  'releasePostureSource', 'copySettings', 'setCalibrationProgress', 'syncWearableRuntime', 'onWearableSettingsChanged',
+  'toggleWearableReminder', 'toggleWearableRoute', 'prepareNotificationSync', 'refreshWearableDevices', 'testWearableReminder'];
 let now = Date.UTC(2026, 9, 14, 9);
 class ClockDate extends Date { static now() { return now; } }
 function createPage() {
-  const calls = { records: 0, saved: 0, applied: 0, pairs: 0, stopped: 0, sourceSamples: 0 };
+  const calls = { records: 0, saved: 0, applied: 0, pairs: 0, stopped: 0, sourceSamples: 0,
+    wearableUpdates: [], wearableEnabled: [], wearableRoutes: [], wearableOrder: [], wearableSubmits: [],
+    wearableDestroyed: 0, wearableRefreshes: 0, wearablePrepares: 0, wearableTests: 0, wearableBusy: false };
   const timers = new Map(); let nextTimer = 0;
   const cooldown = new rules.ReminderVibrationCooldown();
   const feedback = { isAvailable: () => true, statusDetail: () => '本地马达可用', async stop() { calls.stopped++; },
     async pulsePair(current, started) { if (!current()) return false; calls.pairs++; started(); return true; } };
+  const wearable = { controller: {
+    update: runtime => { calls.wearableOrder.push('runtime'); calls.wearableUpdates.push(normalize(runtime)); },
+    setRoute: route => { calls.wearableOrder.push('route'); calls.wearableRoutes.push(route); },
+    setEnabled: enabled => { calls.wearableOrder.push('enabled'); calls.wearableEnabled.push(enabled); },
+    state: () => ({ busy: calls.wearableBusy }),
+    refresh: async () => { calls.wearableRefreshes++; },
+    prepareNotificationSync: async () => { calls.wearablePrepares++; },
+    test: async () => { calls.wearableTests++; },
+    submit: (decision, score, timestamp) => calls.wearableSubmits.push({ decision: normalize(decision),
+      score, timestamp, pairs: calls.pairs })
+  }, isCurrentPage: pageId => pageId === 1,
+    async destroy() { calls.wearableDestroyed++; } };
   const p = vm.runInNewContext(ts.transpileModule(`class Subject { ${pageNames.map(name => pageMethod(name)).join('\n')} }
     new Subject();`, { compilerOptions }).outputText, {
     Date: ClockDate, ...types, ...rules, PHONE_VIBRATION_COOLDOWN: cooldown,
     ReminderFeedbackService: feedback, BREAK_MESSAGE_TIMEOUT_MS: 8000,
+    WearableRuntime, WearableReminderService: wearable,
     captureCalibration: load('models/CalibrationCapture').captureCalibration,
     buildCalibrationProfile: load('models/PostureCalibration').buildCalibrationProfile,
     QUICK_CALIBRATION_FRAME_COUNT: 5, CALIBRATION_FRAME_COUNT: 10,
@@ -115,6 +134,7 @@ function createPage() {
   });
   const profile = types.createDefaultCalibration();
   Object.assign(p, { pageRunId: 1, guardRunId: 1, guardSessionStartedAt: now, appForeground: true,
+    wearablePageVisible: true, wearablePageId: 1, loaded: true,
     isGuarding: true, isSampling: false, isCalibrating: false, isManualOperation: false,
     isStartingGuard: false, isStoppingGuard: false, lowScoreLevel: 0, lowScoreEdgeVisible: false,
     lowScoreDataValid: false, lowScoreExpiresAt: 0, lowScoreLatestScore: 100,
@@ -123,7 +143,7 @@ function createPage() {
     reminderExpiryTimer: -1, breakMessageTimer: -1, reminderExpiryRunId: 0, breakMessageRunId: 0,
     summary: '', records: [],
     settings: types.createDefaultSettings(), lowScoreScheduler: new rules.LowScoreReminderScheduler(cooldown),
-    applyResult() { calls.applied++; }, syncSourceStatus() {}, copySettings: value => normalize(value),
+    applyResult() { calls.applied++; }, syncSourceStatus() {},
     persistData() { calls.saved++; }, stopGuard: async () => { p.isGuarding = false; },
     appendRecord(result) { calls.records++; p.records.unshift({ timestamp: result.timestamp, score: result.score,
       sitLevel: result.sit.level, chinLevel: result.chin.level, mouthLevel: result.mouth.level,
@@ -133,6 +153,7 @@ function createPage() {
     } }
   });
   p.settings.profile = profile; p.lowScoreScheduler.beginSession(1, now);
+  p.onWearableSettingsChanged();
   function setFrame(score) {
     const metric = { level: types.PostureLevel.BAD, score, value: 35, baseline: 0,
       label: '低头', alertType: types.PostureAlertType.ITEM_03 };
@@ -154,7 +175,7 @@ function createPage() {
 
 function guardHarness(mode) {
   const f = createPage(), p = f.p, calls = [];
-  delete p.stopGuard; delete p.copySettings;
+  delete p.stopGuard;
   p.lowScoreScheduler.stop();
   Object.assign(p, { isGuarding: false, guardRunId: 0, guardSessionStartedAt: 0, timer: -1,
     clearSessionReport: () => calls.push('clear-report'), abilityContext: () => ({}),
@@ -181,16 +202,29 @@ function guardHarness(mode) {
 
 async function main() {
   const f = createPage();
+  assert.equal(f.p.settings.wearableReminder, false);
+  assert.equal(f.p.settings.wearableReminderRoute, types.WearableReminderRoute.NOTIFICATION_SYNC);
+  assert.deepEqual(f.calls.wearableRoutes, [types.WearableReminderRoute.NOTIFICATION_SYNC]);
+  assert.deepEqual(f.calls.wearableOrder.slice(0, 3), ['route', 'enabled', 'runtime']);
+  assert.deepEqual(f.calls.wearableEnabled, [false]);
   await f.capture(49); await f.capture(49, 3000); await f.capture(49, 3000);
   assert.equal(f.p.lowScoreLevel, 3); assert.equal(f.calls.pairs, 1);
   assert.equal(f.p.records.filter(r => r.action !== types.ReminderAction.NONE).length, 1);
+  const submitted = f.calls.wearableSubmits.at(-1);
+  assert.equal(submitted.decision.level, rules.LowScoreLevel.SEVERE);
+  assert.equal(submitted.score, 49); assert.equal(submitted.timestamp, f.p.frame.timestamp);
+  assert.equal(submitted.pairs, 0, 'Wearable submission must precede phone vibration');
+  assert.equal(f.calls.wearableUpdates.at(-1).foreground, true);
+  assert.equal(f.calls.wearableUpdates.at(-1).score, 49);
+  f.p.settings.wearableReminder = true; f.p.onWearableSettingsChanged();
+  assert.equal(f.calls.wearableEnabled.at(-1), true);
   for (let i = 0; i < 19; i++) await f.capture(49, 3000);
   assert.equal(f.calls.pairs, 1);
   await f.capture(49, 3000);
   assert.equal(f.calls.pairs, 2);
   assert.equal(f.p.records.filter(r => r.action !== types.ReminderAction.NONE).length, 2);
   assert.equal(f.calls.sourceSamples, 23);
-  console.log('PASS: actual capture integrates one dispatcher; combined light/vibration counts once; repeated haptic counts only on success');
+  pass('actual capture integrates one dispatcher; combined light/vibration counts once; repeated haptic counts only on success');
 
   const visualOnly = createPage();
   await visualOnly.capture(59); await visualOnly.capture(59, 3000); await visualOnly.capture(59, 3000);
@@ -198,13 +232,16 @@ async function main() {
   await visualOnly.capture(49, 3000); await visualOnly.capture(49, 3000); await visualOnly.capture(49, 3000);
   assert.equal(visualOnly.p.lowScoreLevel, 3); assert.equal(visualOnly.calls.pairs, 0);
   assert.equal(visualOnly.p.records.filter(r => r.action !== types.ReminderAction.NONE).length, 1);
+  assert.equal(visualOnly.calls.wearableSubmits.at(-1).decision.level, rules.LowScoreLevel.SEVERE);
+  assert.equal(visualOnly.calls.wearableSubmits.at(-1).decision.vibrate, false);
   const failed = createPage();
   failed.feedback.pulsePair = async () => false;
   await failed.capture(49); await failed.capture(49, 3000); await failed.capture(49, 3000);
   for (let i = 0; i < 20; i++) await failed.capture(49, 3000);
   assert.equal(failed.p.records.filter(r => r.action !== types.ReminderAction.NONE).length, 1);
   assert.equal(failed.p.lowScoreLevel, 3);
-  console.log('PASS: disabled/failed vibration retains visual state without phantom repeated reminder records');
+  pass('disabled/failed vibration retains visual state without phantom repeated reminder records');
+  pass('wearable submissions precede phone feedback, preserve phone cooldown/records and do not depend on phone vibration');
 
   const invalid = createPage();
   await invalid.capture(49); await invalid.capture(49, 3000); await invalid.capture(49, 3000);
@@ -215,7 +252,7 @@ async function main() {
   invalid.p.postureSource.sample = async () => { throw Error('stream failure'); };
   await invalid.p.captureFrame(); assert.equal(invalid.p.lowScoreLevel, 0);
   assert.equal(invalid.p.summary, '采样失败');
-  console.log('PASS: invalid keypoints and source errors immediately cancel visuals, pending feedback and expiry tasks');
+  pass('invalid keypoints and source errors immediately cancel visuals, pending feedback and expiry tasks');
 
   for (const patch of [{ settings: { ...types.createDefaultSettings(), useCoreVision: false } },
     { isGuarding: false }, { isCalibrating: true }, { appForeground: false }]) {
@@ -229,7 +266,7 @@ async function main() {
   const pending = stale.p.captureFrame(true); stale.p.guardRunId++;
   finish(old); await pending;
   assert.equal(stale.calls.applied, 0); assert.equal(stale.calls.records, 0);
-  console.log('PASS: mock/diagnostic/calibration/background samples do not issue or record reminders; forced stale callbacks ignored');
+  pass('mock/diagnostic/calibration/background samples do not issue or record reminders; forced stale callbacks ignored');
 
   const expiring = createPage();
   await expiring.capture(59); await expiring.capture(59, 3000); await expiring.capture(59, 3000);
@@ -248,7 +285,7 @@ async function main() {
   assert.equal(replaced.timers.size, 1, 'Old expiry cannot replace or orphan the current task');
   replaced.p.stopLowScoreReminders(); oldExpiry.callback();
   assert.equal(replaced.timers.size, 0); assert.equal(replaced.p.lowScoreDataValid, false);
-  console.log('PASS: actual UI expiry callback only clears state, never promotes an old sample or vibrates');
+  pass('actual UI expiry callback only clears state, never promotes an old sample or vibrates');
 
   const breaking = createPage();
   const breakDecision = new rules.LowScoreDecision();
@@ -262,7 +299,7 @@ async function main() {
   breaking.p.applyLowScoreDecision(currentBreak); oldBreak.callback();
   assert.equal(breaking.p.reminderMessage, '请抬头');
   assert.equal(breaking.p.reminderAlertType, types.PostureAlertType.NONE);
-  console.log('PASS: low-score text preempts rest text; cancelled rest callbacks cannot erase the current reminder');
+  pass('low-score text preempts rest text; cancelled rest callbacks cannot erase the current reminder');
 
   const preview = createPage(); preview.p.isGuarding = false;
   const snapshot = normalize({ score: preview.p.score, settings: preview.p.settings, records: preview.p.records });
@@ -276,21 +313,125 @@ async function main() {
   assert.equal(preview.p.reminderPreviewLevel, 0);
   assert.equal(preview.p.lowScoreDataValid, false);
   preview.p.aboutToDisappear(); assert.equal(preview.timers.size, 0);
-  console.log('PASS: isolated preview cannot modify camera, score, baseline/statistics; shares phone cooldown and cleans up on background/disposal');
+  assert.equal(preview.calls.wearableSubmits.length, 0);
+  assert.equal(preview.calls.wearableDestroyed, 1); assert.equal(preview.p.wearablePageVisible, false);
+  assert.equal(preview.calls.wearableUpdates.at(-1).foreground, false);
+  pass('isolated preview cannot modify camera, score, baseline/statistics; shares phone cooldown and cleans up on background/disposal');
+
+  for (const route of [types.WearableReminderRoute.WEAR_ENGINE, types.WearableReminderRoute.NOTIFICATION_SYNC]) {
+    const copy = createPage();
+    copy.p.settings.wearableReminder = true; copy.p.settings.wearableReminderRoute = route;
+    copy.p.settings.vibration = false; copy.p.settings.lowScoreEdgeLight = false;
+    copy.p.settings.reduceReminderMotion = true; copy.p.settings.profile.sampleIntervalMs = 5000;
+    copy.p.settings.profile.calibratedAt = now - 1000; copy.p.settings.profile.neutralLipGapRatio = .12;
+    const before = normalize(copy.p.settings);
+    const settings = copy.p.copySettings(copy.p.settings);
+    assert.deepEqual(normalize(settings), before, 'The actual copySettings method must preserve every setting');
+    assert.notEqual(settings, copy.p.settings); assert.notEqual(settings.profile, copy.p.settings.profile);
+    settings.profile.neutralPitch = 10; assert.deepEqual(normalize(copy.p.settings), before);
+    copy.p.toggleVibration(true); copy.p.toggleLowScoreEdgeLight(true); copy.p.toggleReduceReminderMotion(false);
+    assert.equal(copy.p.settings.wearableReminderRoute, route);
+    assert.equal(copy.p.settings.wearableReminder, true); assert.equal(copy.calls.saved, 3);
+    assert.deepEqual(normalize(copy.p.settings.profile), before.profile);
+    assert.equal(copy.calls.wearablePrepares, 0); assert.equal(copy.calls.wearableTests, 0);
+  }
+  pass('actual copySettings deep-copies calibration and preserves both routes across phone reminder preference changes');
+
+  const route = createPage(); route.p.isGuarding = false;
+  route.p.settings.wearableReminderRoute = types.WearableReminderRoute.WEAR_ENGINE;
+  const phoneSettings = normalize(route.p.settings);
+  route.p.toggleWearableRoute(types.WearableReminderRoute.NOTIFICATION_SYNC);
+  assert.equal(route.p.settings.wearableReminder, false);
+  assert.equal(route.p.settings.wearableReminderRoute, types.WearableReminderRoute.NOTIFICATION_SYNC);
+  assert.equal(route.calls.saved, 1); assert.equal(route.calls.wearableRefreshes, 0);
+  assert.deepEqual(route.calls.wearableOrder.slice(-3), ['route', 'enabled', 'runtime']);
+  route.p.toggleWearableReminder(true);
+  assert.equal(route.p.settings.wearableReminderRoute, types.WearableReminderRoute.NOTIFICATION_SYNC);
+  assert.equal(route.calls.wearableRefreshes, 1);
+  assert.deepEqual(route.calls.wearableOrder.slice(-3), ['route', 'enabled', 'runtime']);
+  route.p.toggleWearableRoute(types.WearableReminderRoute.WEAR_ENGINE);
+  assert.equal(route.p.settings.wearableReminder, true); assert.equal(route.calls.wearableRefreshes, 2);
+  route.p.toggleWearableReminder(false);
+  assert.equal(route.calls.wearableRefreshes, 2); assert.equal(route.calls.wearablePrepares, 0);
+  assert.equal(route.calls.wearableTests, 0); assert.equal(route.calls.records, 0); assert.equal(route.calls.pairs, 0);
+  assert.equal(route.calls.sourceSamples, 0);
+  assert.deepEqual(normalize(route.p.settings), phoneSettings);
+  pass('actual route switches set route before enabled/runtime, keep off by default and only refresh enabled routes');
+
+  for (const patch of [{ loaded: false }, { isManualOperation: true }, { isStartingGuard: true },
+    { isStoppingGuard: true }, { isGuarding: true }, { isCalibrating: true }, { appForeground: false },
+    { wearableBusy: true }]) {
+    const locked = createPage(); locked.p.isGuarding = false;
+    if (patch.wearableBusy) locked.calls.wearableBusy = true;
+    else Object.assign(locked.p, patch);
+    const before = normalize(locked.p.settings), order = locked.calls.wearableOrder.length;
+    locked.p.toggleWearableRoute(types.WearableReminderRoute.NOTIFICATION_SYNC);
+    assert.deepEqual(normalize(locked.p.settings), before, JSON.stringify(patch));
+    assert.equal(locked.calls.saved, 0); assert.equal(locked.calls.wearableRefreshes, 0);
+    assert.equal(locked.calls.wearableOrder.length, order);
+  }
+  const unchanged = createPage(); unchanged.p.isGuarding = false;
+  unchanged.p.toggleWearableRoute(types.WearableReminderRoute.NOTIFICATION_SYNC);
+  assert.equal(unchanged.calls.saved, 0); assert.equal(unchanged.calls.wearableRefreshes, 0);
+  const stalePage = createPage(); stalePage.p.wearablePageId = 2;
+  const order = stalePage.calls.wearableOrder.length;
+  stalePage.p.settings.wearableReminderRoute = types.WearableReminderRoute.NOTIFICATION_SYNC;
+  stalePage.p.settings.wearableReminder = true; stalePage.p.onWearableSettingsChanged(); stalePage.p.syncWearableRuntime();
+  assert.equal(stalePage.calls.wearableOrder.length, order);
+  pass('route controls reject unloaded/guarding/calibrating/background/busy runs and stale page leases cannot change the controller');
+
+  const prepare = createPage(); prepare.p.isGuarding = false;
+  prepare.p.settings.wearableReminder = true;
+  prepare.p.settings.wearableReminderRoute = types.WearableReminderRoute.NOTIFICATION_SYNC;
+  prepare.p.onWearableSettingsChanged();
+  const beforePrepare = normalize({ settings: prepare.p.settings, records: prepare.p.records });
+  prepare.p.prepareNotificationSync();
+  assert.equal(prepare.calls.wearablePrepares, 1); assert.equal(prepare.calls.wearableUpdates.at(-1).testAllowed, true);
+  assert.equal(prepare.calls.wearableTests, 0); assert.equal(prepare.calls.wearableSubmits.length, 0);
+  assert.equal(prepare.calls.saved, 0); assert.equal(prepare.calls.sourceSamples, 0); assert.equal(prepare.calls.pairs, 0);
+  assert.deepEqual(normalize({ settings: prepare.p.settings, records: prepare.p.records }), beforePrepare);
+  for (const patch of [{ loaded: false }, { isManualOperation: true }, { isStartingGuard: true },
+    { isStoppingGuard: true }, { isSampling: true }, { isGuarding: true }, { isCalibrating: true },
+    { appForeground: false }, { activeTab: 0 }]) {
+    const blocked = createPage(); blocked.p.isGuarding = false; Object.assign(blocked.p, patch);
+    blocked.p.prepareNotificationSync(); assert.equal(blocked.calls.wearablePrepares, 0, JSON.stringify(patch));
+    assert.equal(blocked.calls.wearableTests, 0); assert.equal(blocked.calls.sourceSamples, 0);
+  }
+  pass('manual B preparation only runs in idle foreground settings and never samples, tests, records or changes preferences');
 
   let raw = JSON.stringify({ settings: { ...types.createDefaultSettings(), lowScoreEdgeLight: false,
-    reduceReminderMotion: true }, records: [], lastUpdatedAt: now });
+    reduceReminderMotion: true, wearableReminder: true,
+    wearableReminderRoute: types.WearableReminderRoute.NOTIFICATION_SYNC }, records: [], lastUpdatedAt: now });
   const store = load('services/PostureSessionStore', { '@kit.ArkData': { preferences: { getPreferences: async () => ({
     get: async () => raw, put: async (key, value) => { raw = value; }, flush: async () => {}
   }) } } });
   let loaded = await store.PostureSessionStore.loadWithStatus({});
   assert.equal(loaded.data.settings.lowScoreEdgeLight, false); assert.equal(loaded.data.settings.reduceReminderMotion, true);
+  assert.equal(loaded.data.settings.wearableReminder, true);
+  assert.equal(loaded.data.settings.wearableReminderRoute, types.WearableReminderRoute.NOTIFICATION_SYNC);
+  const copied = createPage().p.copySettings(loaded.data.settings);
+  await store.PostureSessionStore.save({}, { ...loaded.data, settings: copied });
+  assert.equal(JSON.parse(raw).settings.wearableReminderRoute, types.WearableReminderRoute.NOTIFICATION_SYNC);
   const legacy = JSON.parse(raw); delete legacy.settings.lowScoreEdgeLight; delete legacy.settings.reduceReminderMotion;
+  delete legacy.settings.wearableReminder;
+  delete legacy.settings.wearableReminderRoute;
   raw = JSON.stringify(legacy); loaded = await store.PostureSessionStore.loadWithStatus({});
   assert.equal(loaded.data.settings.lowScoreEdgeLight, true); assert.equal(loaded.data.settings.reduceReminderMotion, false);
+  assert.equal(loaded.data.settings.wearableReminder, false);
+  assert.equal(loaded.data.settings.wearableReminderRoute, types.WearableReminderRoute.NOTIFICATION_SYNC);
+  assert.deepEqual(normalize(loaded.data.settings.profile), legacy.settings.profile);
   await store.PostureSessionStore.save({}, loaded.data);
   assert.equal(JSON.parse(raw).settings.lowScoreEdgeLight, true);
-  console.log('PASS: reminder switches persist; legacy settings migrate without changing calibration or interval');
+  assert.equal(JSON.parse(raw).settings.wearableReminder, false);
+  assert.equal(JSON.parse(raw).settings.wearableReminderRoute, types.WearableReminderRoute.NOTIFICATION_SYNC);
+  for (const invalid of [null, '', 'B', 'notification-sync ', 7, true, {}]) {
+    raw = JSON.stringify({ ...legacy, settings: { ...legacy.settings, wearableReminderRoute: invalid } });
+    loaded = await store.PostureSessionStore.loadWithStatus({});
+    assert.equal(loaded.data.settings.wearableReminderRoute, types.WearableReminderRoute.NOTIFICATION_SYNC);
+    assert.equal(loaded.data.settings.wearableReminder, false);
+    assert.deepEqual(normalize(loaded.data.settings.profile), legacy.settings.profile);
+  }
+  pass('B route survives actual settings copy/storage; missing and malformed routes default to B without enabling reminders');
 
   assert.doesNotMatch(read(sourceRoot + 'pages/Index.ets'), /reminder\.feed|ReminderFeedbackService\.notify|showHardReminder|HardReminderOverlay/);
   assert.doesNotMatch(read(sourceRoot + 'services/ReminderFeedbackService.ets'), /AudioKit|playSystemSound|notify\(/);
@@ -302,7 +443,7 @@ async function main() {
   assert.match(pageMethod('build'), /level: this\.reminderPreviewLevel > LowScoreLevel\.NORMAL \?/);
   assert.match(pageMethod('build'), /expandSafeArea\(\[SafeAreaType\.SYSTEM, SafeAreaType\.CUTOUT\]/);
   assert.doesNotMatch(pageMethod('ReminderPreviewPanel'), /LowScoreEdgeLight|height\(200\)|clip\(true\)/);
-  console.log('PASS: no legacy independent vibration/sound/strong-popup path or preview side effects remain');
+  pass('no legacy independent vibration/sound/strong-popup path or preview side effects remain');
 
   for (const mode of ['healthy', 'cancel', 'countdown-cancel', 'missing', 'throw', 'background', 'disappear']) {
     const f = guardHarness(mode), p = f.p;
@@ -327,6 +468,7 @@ async function main() {
       assert.equal(f.timers.size, 0); assert.deepEqual(normalize(p.settings.profile), profile);
     }
   }
-  console.log('PASS: actual guard start/stop/calibration preserve frame counts/baselines, close preview, clear tasks and reject cancelled/background sessions');
+  pass('actual guard start/stop/calibration preserve frame counts/baselines, close preview, clear tasks and reject cancelled/background sessions');
+  console.log(`Reminder integration passed: ${checks} groups; ${comparisons} scoring comparisons match ${baseline}.`);
 }
 main().catch(error => { console.error(error); process.exitCode = 1; });
