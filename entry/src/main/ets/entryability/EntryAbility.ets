@@ -14,10 +14,18 @@ export default class EntryAbility extends UIAbility {
   private mainWindow?: window.Window;
   private windowSizeListener: (size: window.Size) => void = (size: window.Size): void => {
     this.publishScreenSize(size.width, size.height);
+    this.publishTopAvoidInset();
   };
+  private avoidAreaListener: (options: window.AvoidAreaOptions) => void =
+    (options: window.AvoidAreaOptions): void => {
+      if (options.type === window.AvoidAreaType.TYPE_SYSTEM || options.type === window.AvoidAreaType.TYPE_CUTOUT) {
+        this.publishTopAvoidInset();
+      }
+    };
 
   onCreate(want: Want, launchParam: AbilityConstant.LaunchParam): void {
     AppStorage.setOrCreate('appForeground', true);
+    AppStorage.setOrCreate('mainWindowTopInsetPx', 0);
     AppStorage.setOrCreate('immersiveLevel', 3);
     AppStorage.setOrCreate('appearanceReady', false);
     AppStorage.setOrCreate('appearanceError', '');
@@ -51,8 +59,11 @@ export default class EntryAbility extends UIAbility {
         }
         const rect = mainWindow.getWindowProperties().windowRect;
         this.publishScreenSize(rect.width, rect.height);
+        this.publishTopAvoidInset();
       }).catch((): void => { hilog.warn(DOMAIN, TAG, 'Full-screen glow layout unavailable'); });
       mainWindow.on('windowSizeChange', this.windowSizeListener);
+      mainWindow.on('avoidAreaChange', this.avoidAreaListener);
+      this.publishTopAvoidInset();
       const rect = mainWindow.getWindowProperties().windowRect;
       this.publishScreenSize(rect.width, rect.height);
       GuardWindowService.setMainWindow(mainWindow);
@@ -65,6 +76,7 @@ export default class EntryAbility extends UIAbility {
         hilog.error(DOMAIN, TAG, 'Failed to load content: %{public}s', JSON.stringify(err));
         return;
       }
+      this.publishTopAvoidInset();
       hilog.info(DOMAIN, TAG, 'Loaded main page');
     });
   }
@@ -76,13 +88,20 @@ export default class EntryAbility extends UIAbility {
     } catch (error) {
       hilog.warn(DOMAIN, TAG, 'Window size listener cleanup failed');
     }
+    try {
+      this.mainWindow?.off('avoidAreaChange', this.avoidAreaListener);
+    } catch (error) {
+      hilog.warn(DOMAIN, TAG, 'Window avoid-area listener cleanup failed');
+    }
     this.mainWindow = undefined;
+    AppStorage.setOrCreate('mainWindowTopInsetPx', 0);
     PostureFloatService.close();
     hilog.info(DOMAIN, TAG, 'Ability onWindowStageDestroy');
   }
 
   onForeground(): void {
     this.updateSystemBars(this.context.config.colorMode);
+    this.publishTopAvoidInset();
     AppStorage.setOrCreate('appForeground', true);
     hilog.info(DOMAIN, TAG, 'Ability onForeground');
   }
@@ -111,5 +130,21 @@ export default class EntryAbility extends UIAbility {
   private publishScreenSize(width: number, height: number): void {
     AppStorage.setOrCreate('glowWindowWidthPx', width);
     AppStorage.setOrCreate('glowWindowHeightPx', height);
+  }
+
+  private publishTopAvoidInset(): void {
+    const mainWindow = this.mainWindow;
+    if (mainWindow === undefined) {
+      return;
+    }
+    try {
+      const systemTop = mainWindow.getWindowAvoidArea(window.AvoidAreaType.TYPE_SYSTEM).topRect;
+      const cutoutTop = mainWindow.getWindowAvoidArea(window.AvoidAreaType.TYPE_CUTOUT).topRect;
+      const systemBottom = systemTop.height > 0 ? systemTop.top + systemTop.height : 0;
+      const cutoutBottom = cutoutTop.height > 0 ? cutoutTop.top + cutoutTop.height : 0;
+      AppStorage.setOrCreate('mainWindowTopInsetPx', Math.max(0, systemBottom, cutoutBottom));
+    } catch (error) {
+      hilog.warn(DOMAIN, TAG, 'Window top avoid area unavailable');
+    }
   }
 }

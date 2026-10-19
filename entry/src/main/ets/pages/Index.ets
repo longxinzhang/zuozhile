@@ -213,6 +213,7 @@ struct Index {
   @StorageProp('floatCapability') private floatCapability: string = '';
   @State private showSettingsTip: boolean = false;
   @StorageLink('immersiveLevel') private immersiveLevel: number = 3;
+  @StorageProp('mainWindowTopInsetPx') private mainWindowTopInsetPx: number = 0;
   @StorageProp('appearanceReady') private appearanceReady: boolean = false;
   @StorageLink('appearanceError') private appearanceError: string = '';
   private appearanceSaveId: number = 0;
@@ -2220,7 +2221,10 @@ struct Index {
           .onContentWillChange(() => !this.controlsLocked())
           .onChange((index: number) => { this.switchTab(index); })
         }.width('100%').height('100%').mode(NavigationMode.Stack)
-          .title({ builder: this.Header(), height: 72 }, navigationTitleOptions(this.immersiveLevel))
+          .expandSafeArea([SafeAreaType.SYSTEM, SafeAreaType.CUTOUT], [SafeAreaEdge.BOTTOM])
+          .padding({ top: this.getUIContext().px2vp(this.mainWindowTopInsetPx) + 8 })
+          .title({ builder: this.Header(), height: this.activeTab === 0 ? 108 : 72 },
+            navigationTitleOptions(this.immersiveLevel))
           .hideBackButton(true).hideToolBar(true).backgroundColor(APP_BG)
         if (this.showClearDataConfirm) {
           this.ClearDataConfirmOverlay()
@@ -2249,7 +2253,7 @@ struct Index {
       .height('100%')
       .backgroundColor(APP_BG)
       .expandSafeArea([SafeAreaType.SYSTEM, SafeAreaType.CUTOUT],
-        [SafeAreaEdge.TOP, SafeAreaEdge.BOTTOM, SafeAreaEdge.START, SafeAreaEdge.END])
+        [SafeAreaEdge.BOTTOM, SafeAreaEdge.START, SafeAreaEdge.END])
     }
   }
   @Builder
@@ -2305,11 +2309,11 @@ struct Index {
   private Header() {
     Row({ space: 12 }) {
       if (this.activeTab === 0) {
-        Image($r('app.media.brand_mark')).width(36).height(36).borderRadius(10)
+        Image($r('app.media.brand_mark')).width(70.2).height(70.2).borderRadius(19.5)
       }
       Column({ space: 3 }) {
         Text(this.activeTab === 0 ? '坐直了' : TABS[this.activeTab].label)
-          .fontSize(24)
+          .fontSize(this.activeTab === 0 ? 46.8 : 24)
           .fontWeight(FontWeight.Bold)
           .fontColor(INK)
         if (this.lowScoreLevel >= LowScoreLevel.MEDIUM || this.reminderAlertType === PostureAlertType.ITEM_12) {

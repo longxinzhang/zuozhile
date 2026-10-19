@@ -129,11 +129,12 @@ async function main() {
   const floatCalls = [];
   const guardWindows = [];
   const wearableCalls = [];
+  const avoidTypes = { TYPE_SYSTEM: 0, TYPE_CUTOUT: 1, TYPE_KEYBOARD: 3, TYPE_NAVIGATION_INDICATOR: 4 };
   const ability = load('entryability/EntryAbility', {
     '@kit.AbilityKit': { UIAbility: class {}, ConfigurationConstant: {
       ColorMode: { COLOR_MODE_DARK: 0, COLOR_MODE_LIGHT: 1, COLOR_MODE_NOT_SET: -1 }
     } },
-    '@kit.ArkUI': { window: {} },
+    '@kit.ArkUI': { window: { AvoidAreaType: avoidTypes } },
     '@kit.PerformanceAnalysisKit': { hilog: { warn: (...args) => warnings.push(args), info() {}, error() {} } },
     '../services/PostureFloatService': { PostureFloatService: {
       initialize: stage => floatCalls.push(['initialize', stage]),
@@ -190,11 +191,17 @@ async function main() {
   assert.deepEqual(colorModes, [-1]);
   assert.equal(storage.get('appearanceReady'), true);
   assert.equal(storage.get('immersiveLevel'), 3);
+  assert.equal(storage.get('mainWindowTopInsetPx'), 0);
   instance.onDestroy(); assert.deepEqual(wearableCalls, ['suspend', 'destroy']);
   pass('transparent status/navigation bars keep themed foregrounds and publish appColorMode on updates/foreground');
 
   function windowFixture(options = {}) {
     let rect = { left: 0, top: 0, width: 1320, height: 2760 };
+    const topAreas = new Map([
+      [avoidTypes.TYPE_SYSTEM, { left: 0, top: 0, width: 1320, height: 146 }],
+      [avoidTypes.TYPE_CUTOUT, { left: 400, top: 20, width: 200, height: 100 }]
+    ]);
+    let failAvoidRead = false;
     let resolveLayout, rejectLayout;
     const layout = new Promise((resolve, reject) => { resolveLayout = resolve; rejectLayout = reject; });
     const layouts = [], registrations = [], removals = [], contents = [];
@@ -202,6 +209,10 @@ async function main() {
     const mainWindow = {
       setWindowLayoutFullScreen(value) { layouts.push(value); return layout; },
       getWindowProperties: () => ({ windowRect: { ...rect } }),
+      getWindowAvoidArea(type) {
+        if (failAvoidRead) throw Error('avoid area unavailable');
+        return { topRect: { ...topAreas.get(type) } };
+      },
       setWindowSystemBarProperties: async properties => calls.push(properties),
       on(event, listener) { registrations.push([event, listener]); listeners.set(event, listener); },
       off(event, listener) {
@@ -220,6 +231,11 @@ async function main() {
       rect = { ...rect, width, height };
       listeners.get('windowSizeChange')?.({ width, height });
     };
+    const setAvoidTop = (type, top, height, emit = true) => {
+      const topRect = { left: 0, top, width: 1320, height };
+      topAreas.set(type, topRect);
+      if (emit) listeners.get('avoidAreaChange')?.({ type, area: { topRect } });
+    };
     const resolve = async (width, height) => {
       rect = { ...rect, width, height };
       resolveLayout();
@@ -232,16 +248,18 @@ async function main() {
       await Promise.resolve();
     };
     return { subject, stage, mainWindow, layouts, registrations, removals, contents, listeners,
-      start, emitSize, resolve, reject };
+      start, emitSize, setAvoidTop, setAvoidReadFailure: value => { failAvoidRead = value; }, resolve, reject };
   }
 
   const screen = windowFixture();
   screen.start();
   assert.deepEqual(screen.layouts, [true]);
   assert.equal(screen.subject.mainWindow, screen.mainWindow);
-  assert.equal(screen.registrations.length, 1);
+  assert.equal(screen.registrations.length, 2);
   assert.equal(screen.registrations[0][0], 'windowSizeChange');
   assert.equal(screen.registrations[0][1], screen.subject.windowSizeListener);
+  assert.equal(screen.registrations[1][0], 'avoidAreaChange');
+  assert.equal(screen.registrations[1][1], screen.subject.avoidAreaListener);
   assert.deepEqual(screen.contents, ['pages/Index'], 'The content route is unchanged');
   assert.equal(guardWindows.at(-1), screen.mainWindow);
   assert.equal(floatCalls.at(-1)[0], 'initialize');
@@ -249,11 +267,33 @@ async function main() {
   const checkSize = (width, height) => {
     assert.equal(storage.get('glowWindowWidthPx'), width);
     assert.equal(storage.get('glowWindowHeightPx'), height);
-    assert.deepEqual(writes.slice(-2), [['glowWindowWidthPx', width], ['glowWindowHeightPx', height]]);
+    assert.deepEqual(writes.filter(([key]) => key === 'glowWindowWidthPx' || key === 'glowWindowHeightPx').slice(-2),
+      [['glowWindowWidthPx', width], ['glowWindowHeightPx', height]]);
   };
   assert.equal(storage.get('glowWindowWidthPx'), 1320);
   assert.equal(storage.get('glowWindowHeightPx'), 2760);
-  checkBars(false);
+  assert.equal(storage.get('appColorMode'), 1);
+  assert.equal(calls.at(-1).statusBarContentColor, colorsFor(false).ink);
+  assert.equal(storage.get('mainWindowTopInsetPx'), 146, 'Overlapping status/cutout insets are not added');
+  screen.setAvoidTop(avoidTypes.TYPE_SYSTEM, 0, 90);
+  assert.equal(storage.get('mainWindowTopInsetPx'), 120);
+  screen.setAvoidTop(avoidTypes.TYPE_CUTOUT, 30, 130);
+  assert.equal(storage.get('mainWindowTopInsetPx'), 160, 'Cutout position and height both contribute');
+  const beforeKeyboard = writes.length;
+  screen.setAvoidTop(avoidTypes.TYPE_KEYBOARD, 0, 900);
+  screen.setAvoidTop(avoidTypes.TYPE_NAVIGATION_INDICATOR, 0, 91);
+  assert.equal(writes.length, beforeKeyboard, 'Keyboard and bottom indicator cannot shift the title');
+  screen.setAvoidTop(avoidTypes.TYPE_SYSTEM, 0, 0);
+  screen.setAvoidTop(avoidTypes.TYPE_CUTOUT, 40, 0);
+  assert.equal(storage.get('mainWindowTopInsetPx'), 0, 'Empty top rectangles do not leave a phantom inset');
+  screen.setAvoidTop(avoidTypes.TYPE_SYSTEM, 0, 146, false);
+  screen.subject.onForeground();
+  assert.equal(storage.get('mainWindowTopInsetPx'), 146, 'Foreground refreshes the current avoid area');
+  screen.setAvoidReadFailure(true);
+  screen.setAvoidTop(avoidTypes.TYPE_SYSTEM, 0, 200);
+  assert.equal(storage.get('mainWindowTopInsetPx'), 146, 'An unavailable avoid area retains the last valid inset');
+  screen.setAvoidReadFailure(false);
+  screen.setAvoidTop(avoidTypes.TYPE_SYSTEM, 0, 146);
   screen.emitSize(2760, 1320);
   checkSize(2760, 1320);
   screen.emitSize(1320, 2760);
@@ -262,16 +302,20 @@ async function main() {
   checkSize(2760, 1320);
   screen.subject.onWindowStageDestroy();
   assert.equal(wearableCalls.at(-1), 'suspend');
-  assert.equal(screen.removals.length, 1);
+  assert.equal(screen.removals.length, 2);
   assert.equal(screen.removals[0][0], 'windowSizeChange');
   assert.equal(screen.removals[0][1], screen.registrations[0][1]);
+  assert.equal(screen.removals[1][0], 'avoidAreaChange');
+  assert.equal(screen.removals[1][1], screen.registrations[1][1]);
   assert.equal(screen.listeners.size, 0);
   assert.equal(screen.subject.mainWindow, undefined);
+  assert.equal(storage.get('mainWindowTopInsetPx'), 0);
   assert.deepEqual(floatCalls.at(-1), ['close']);
   const afterDestroy = writes.length;
   screen.emitSize(1320, 2760);
+  screen.registrations[1][1]({ type: avoidTypes.TYPE_SYSTEM, area: {} });
   assert.equal(writes.length, afterDestroy);
-  pass('full-screen layout publishes the complete 1320x2760/2760x1320 rect, preserves content and pairs size on/off');
+  pass('full-screen size and dynamic top insets handle overlap, cutouts, keyboard isolation, foreground and paired cleanup');
 
   const destroyed = windowFixture();
   destroyed.start();
@@ -310,25 +354,54 @@ async function main() {
     assert.equal(navigation.length, 1);
     const attrs = new Map();
     let expression = navigation[0];
+    let normalized = printer.printNode(ts.EmitHint.Unspecified, expression, source);
     while (ts.isPropertyAccessExpression(expression.parent) && expression.parent.expression === expression &&
       ts.isCallExpression(expression.parent.parent)) {
       const call = expression.parent.parent;
-      attrs.set(expression.parent.name.text, call.arguments);
+      const name = expression.parent.name.text;
+      attrs.set(name, call.arguments);
+      if (name !== 'expandSafeArea' && name !== 'padding' && name !== 'title') {
+        normalized += '.' + name + '(' + Array.from(call.arguments,
+          argument => printer.printNode(ts.EmitHint.Unspecified, argument, source)).join(', ') + ')';
+      }
       expression = call;
     }
-    return { expression, attrs };
+    return { expression, attrs, normalized };
   }
-  const { expression: content, attrs } = bodyNavigation(ast);
+  const { attrs, normalized } = bodyNavigation(ast);
   const baseline = parse('entry/src/main/ets/pages/Index.ets', execFileSync('git',
     ['show', 'd73d591:entry/src/main/ets/pages/Index.ets'], { cwd: root, encoding: 'utf8' }));
-  assert.equal(printer.printNode(ts.EmitHint.Unspecified, content, ast),
-    printer.printNode(ts.EmitHint.Unspecified, bodyNavigation(baseline).expression, baseline),
-    'The full body Navigation subtree must remain unchanged from the accepted 0.2.7 baseline');
+  const baselineNavigation = bodyNavigation(baseline);
+  assert.equal(normalized, baselineNavigation.normalized,
+    'Navigation content and modifiers other than safe-area/title sizing remain unchanged from the accepted 0.2.7 baseline');
+  const title = attrs.get('title');
+  const baselineTitle = baselineNavigation.attrs.get('title');
+  assert.equal(title.length, baselineTitle.length);
+  assert.ok(ts.isObjectLiteralExpression(title[0]));
+  assert.equal(title[0].properties.length, 2);
+  assert.equal(title[0].properties[0].name.getText(ast), 'builder');
+  assert.equal(title[0].properties[0].initializer.getText(ast),
+    baselineTitle[0].properties[0].initializer.getText(baseline));
+  assert.equal(title[0].properties[1].name.getText(ast), 'height');
+  assert.equal(title[0].properties[1].initializer.getText(ast), 'this.activeTab === 0 ? 108 : 72');
+  assert.equal(title[1].getText(ast), baselineTitle[1].getText(baseline), 'Keep native title material unchanged');
   assert.equal(attrs.get('backgroundColor')?.[0].getText(ast), 'APP_BG', 'Only system bar backgrounds become transparent');
   assert.equal(attrs.get('width')?.[0].text, '100%');
   assert.equal(attrs.get('height')?.[0].text, '100%');
-  assert.equal(attrs.has('expandSafeArea'), false, 'The glow does not expand the body navigation into system bars');
-  assert.equal(attrs.has('padding'), false, 'Full-screen glow must not add body insets');
+  assert.deepEqual(Array.from(attrs.get('expandSafeArea')[0].elements, node => node.getText(ast)),
+    ['SafeAreaType.SYSTEM', 'SafeAreaType.CUTOUT']);
+  assert.deepEqual(Array.from(attrs.get('expandSafeArea')[1].elements, node => node.getText(ast)),
+    ['SafeAreaEdge.BOTTOM'], 'Navigation must explicitly override its default TOP expansion');
+  const topPadding = attrs.get('padding')[0];
+  assert.ok(ts.isObjectLiteralExpression(topPadding));
+  assert.equal(topPadding.properties.length, 1, 'Only the content top inset changes');
+  assert.equal(topPadding.properties[0].name.getText(ast), 'top');
+  assert.equal(topPadding.properties[0].initializer.getText(ast),
+    'this.getUIContext().px2vp(this.mainWindowTopInsetPx) + 8',
+    'Keep the actual window avoid area plus 8vp of additional top spacing');
+  const topInset = page.members.find(node => node.name?.getText(ast) === 'mainWindowTopInsetPx');
+  assert.ok(topInset);
+  assert.match(printer.printNode(ts.EmitHint.Unspecified, topInset, ast), /@StorageProp\('mainWindowTopInsetPx'\)/);
   assert.equal(attrs.has('ignoreLayoutSafeArea'), false, 'Only the glow host may ignore body safe areas');
   const glowNodes = [];
   const visitGlow = node => {
@@ -363,7 +436,41 @@ async function main() {
   for (const attr of ['expandSafeArea', 'padding', 'margin', 'clip', 'border', 'backgroundColor']) {
     assert.equal(hostAttrs.has(attr), false, 'The glow host cannot inset, clip or cover the body: ' + attr);
   }
-  pass('body Navigation matches 0.2.7 while the single noninteractive glow host expands its layout at all screen edges');
+  pass('Navigation preserves accepted content, overrides default TOP expansion and applies dynamic insets outside the glow');
+
+  const headerNodes = [];
+  const visitHeader = node => {
+    if (ts.isEtsComponentExpression(node)) headerNodes.push(node);
+    ts.forEachChild(node, visitHeader);
+  };
+  visitHeader(page.members.find(node => node.name?.getText(ast) === 'Header').body);
+  const headerAttributes = node => {
+    const attributes = new Map();
+    let expression = node;
+    while (ts.isPropertyAccessExpression(expression.parent) && expression.parent.expression === expression &&
+      ts.isCallExpression(expression.parent.parent)) {
+      const call = expression.parent.parent;
+      attributes.set(expression.parent.name.text, call.arguments);
+      expression = call;
+    }
+    return attributes;
+  };
+  const brand = headerAttributes(headerNodes.find(node => node.expression.getText(ast) === 'Image' &&
+    node.arguments[0].getText(ast) === "$r('app.media.brand_mark')"));
+  assert.ok(Math.abs(Number(brand.get('width')[0].getText(ast)) - 46.8 * 1.5) < 1e-9);
+  assert.ok(Math.abs(Number(brand.get('height')[0].getText(ast)) - 46.8 * 1.5) < 1e-9);
+  assert.equal(Number(brand.get('borderRadius')[0].getText(ast)), 13 * 1.5);
+  const heading = headerAttributes(headerNodes.find(node => node.expression.getText(ast) === 'Text' &&
+    node.arguments[0].getText(ast) === "this.activeTab === 0 ? '坐直了' : TABS[this.activeTab].label"));
+  const headingSize = heading.get('fontSize')[0];
+  assert.ok(ts.isConditionalExpression(headingSize));
+  assert.equal(headingSize.condition.getText(ast), 'this.activeTab === 0');
+  assert.ok(Math.abs(Number(headingSize.whenTrue.getText(ast)) - 31.2 * 1.5) < 1e-9);
+  assert.equal(Number(headingSize.whenFalse.getText(ast)), 24);
+  const settingsButton = headerAttributes(headerNodes.find(node => node.expression.getText(ast) === 'Button'));
+  assert.equal(Number(settingsButton.get('width')[0].getText(ast)), 40);
+  assert.equal(Number(settingsButton.get('height')[0].getText(ast)), 40);
+  pass('home brand and title grow another 50%, with a taller home header and unchanged other-page titles/settings button');
 
   const lightNames = JSON.parse(read('entry/src/main/resources/base/element/color.json')).color.map(c => c.name).sort();
   const darkNames = JSON.parse(read('entry/src/main/resources/dark/element/color.json')).color.map(c => c.name).sort();
