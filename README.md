@@ -42,6 +42,12 @@ HarmonyOS NEXT / ArkTS 姿态守护应用 MVP。
 - 2026-10-15 已按用户确认的范围完成指定手机深浅色隔离预览、静态切换、交互取消和系统截图相册保存验收，测试后恢复原设置；真人守护端到端、实际振感/硬件精确时序及长期功耗仍未测。
 - 自动测试、构建与设备验收分别记录在 [docs/LowScoreReminder.md](docs/LowScoreReminder.md)。
 
+## 独立实时骨骼监看
+
+- 「设置 → 实时骨骼监看」提供独立连续查看入口，无需开启守护，不评分、不更新基线或统计。
+- 默认纯骨骼，支持同帧相机叠加、镜像、开始/停止；显示实际 FPS 和处理耗时，目标最高约 10 FPS，实际速度取决于设备。
+- 连续会话串行处理新帧，退出或后台停止并释放相机，不自动恢复；与守护、校准和抽样互斥。说明及能力边界见 [docs/LiveSkeletonMonitor.md](docs/LiveSkeletonMonitor.md)。
+
 ## 0.2.7 骨骼监看开发预览
 
 - 设置 → 开发者工具增加“骨骼监看”，默认关闭。支持纯骨骼、同帧相机叠加和镜像；显示 Core Vision 选中骨架的可靠关节，最多 17 点，不补造遮挡或低置信度的关节。
@@ -144,6 +150,8 @@ node scripts/verify-edge-light.cjs
 node scripts/verify-appearance.cjs
 node scripts/verify-mouth-source.cjs
 node scripts/verify-skeleton.cjs
+node scripts/verify-live-skeleton.cjs
+node scripts/verify-live-skeleton-camera.cjs
 node scripts/verify-wearable-reminder.cjs
 node scripts/verify-notification-sync-test.cjs
 ```

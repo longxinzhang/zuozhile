@@ -3,8 +3,8 @@ import { DebugBone, DebugPoint, skeletonDrawing } from '../debug/SkeletonGeometr
 import { BLUE, GREEN, GREEN_DEEP, GREEN_SOFT, INK, LINE_SOFT, MUTED, RED } from '../theme/ZuozhiTheme';
 
 @Component
-struct SkeletonFrameView {
-  @Prop frame: SkeletonDebugFrame;
+export struct SkeletonFrameView {
+  @Prop @Watch('draw') frame: SkeletonDebugFrame;
   @Prop @Watch('draw') mirrored: boolean = true;
   private context: CanvasRenderingContext2D = new CanvasRenderingContext2D(new RenderingContextSettings(true));
   private ready: boolean = false;
@@ -225,6 +225,7 @@ export struct SkeletonDebugPanel {
         }
         Text(this.guarding ? '检测间隔 ' + (this.intervalMs / 1000).toString() + ' 秒' : '单帧检查 · 不计入统计')
           .fontSize(12).fontColor(MUTED).width('100%')
+        Text('连续监看请使用「设置 → 实时骨骼监看」').fontSize(12).fontColor(MUTED).width('100%')
         Text('仅本机内存 · 退出即清除').fontSize(12).fontColor(MUTED).width('100%')
       }
     }.width('100%').padding({ top: 10, bottom: 16 }).border({ width: { bottom: 1 }, color: LINE_SOFT })

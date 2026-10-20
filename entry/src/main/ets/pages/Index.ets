@@ -29,6 +29,9 @@ import {
 import { PostureSessionStore } from '../services/PostureSessionStore';
 import { SkeletonDebugFeed } from '../services/SkeletonDebugFeed';
 import { SkeletonDebugPanel } from '../components/SkeletonDebugPanel';
+import { LiveSkeletonMonitorView } from '../components/LiveSkeletonMonitorView';
+import { LiveSkeletonController } from '../services/LiveSkeletonController';
+import { LiveSkeletonPhase, LiveSkeletonState } from '../models/LiveSkeletonMonitor';
 import { LowScoreEdgeLight } from '../components/LowScoreEdgeLight';
 import { WearableReminderPanel } from '../components/WearableReminderPanel';
 import { NotificationSyncTestPanel } from '../components/NotificationSyncTestPanel';
@@ -172,6 +175,10 @@ struct Index {
   @State private activeTab: number = 0;
   @State private activeDebugTab: number = 0;
   @State private showDebugPanel: boolean = false;
+  @State private showLiveSkeleton: boolean = false;
+  @State private liveSkeletonClosing: boolean = false;
+  @State private liveSkeletonBusy: boolean = false;
+  @State private liveSkeletonState: LiveSkeletonState = new LiveSkeletonState();
   @State @Watch('syncFloatingState') private isGuarding: boolean = false;
   @State @Watch('syncWearableRuntime') private isStartingGuard: boolean = false;
   @State @Watch('syncWearableRuntime') private isStoppingGuard: boolean = false;
@@ -265,6 +272,7 @@ struct Index {
   private lowScoreScheduler: LowScoreReminderScheduler = new LowScoreReminderScheduler();
   private postureSource: PostureSource = new MockPostureSource();
   private sourceDisposal?: Promise<void>;
+  private liveSkeletonController: LiveSkeletonController = new LiveSkeletonController();
   aboutToAppear(): void {
     this.pageRunId += 1;
     this.wearablePageVisible = true;
@@ -284,6 +292,7 @@ struct Index {
     }
   }
   aboutToDisappear(): void {
+    this.liveSkeletonController?.stop();
     this.pageRunId += 1;
     this.wearablePageVisible = false;
     WearableReminderService.destroy(this.wearablePageId);
@@ -295,6 +304,7 @@ struct Index {
   private onForegroundChanged(): void {
     this.syncWearableRuntime();
     if (!this.appForeground) {
+      this.liveSkeletonController?.stop();
       this.calibrationCancelled = true;
       this.stopReminderPreview();
       this.stopLowScoreReminders();
@@ -531,7 +541,8 @@ struct Index {
     this.isStorageHealthy = isHealthy;
   }
   private controlsLocked(): boolean {
-    return this.isManualOperation || this.isStartingGuard || this.isStoppingGuard;
+    return this.isManualOperation || this.isStartingGuard || this.isStoppingGuard ||
+      this.showLiveSkeleton || this.liveSkeletonBusy || this.liveSkeletonClosing;
   }
   private actionOpacity(): number {
     return this.controlsLocked() ? 0.55 : 1;
@@ -1320,6 +1331,55 @@ struct Index {
       } finally {
         this.isManualOperation = false;
       }
+    }
+  }
+  private openLiveSkeleton(): void {
+    if (!this.loaded || !this.appForeground || this.controlsLocked() || this.isSampling ||
+      this.isGuarding || this.isCalibrating || this.sourceDisposal !== undefined) {
+      return;
+    }
+    this.stopReminderPreview();
+    this.liveSkeletonController.observe((state: LiveSkeletonState): void => {
+      this.liveSkeletonState = state;
+      const busy = state.phase === LiveSkeletonPhase.PREPARING ||
+        state.phase === LiveSkeletonPhase.RUNNING || state.phase === LiveSkeletonPhase.STOPPING || state.cleanupBlocked;
+      if (this.liveSkeletonBusy !== busy) {
+        this.liveSkeletonBusy = busy;
+        this.syncWearableRuntime();
+      }
+    });
+    this.showLiveSkeleton = true;
+    this.syncWearableRuntime();
+  }
+  private closeLiveSkeleton(): void {
+    this.liveSkeletonClosing = true;
+    this.showLiveSkeleton = false;
+    this.liveSkeletonController.stop();
+    this.syncWearableRuntime();
+  }
+  private canRunLiveSkeleton(): boolean {
+    return this.loaded && this.appForeground && this.showLiveSkeleton && !this.isGuarding &&
+      !this.isCalibrating && !this.isManualOperation && !this.isStartingGuard && !this.isStoppingGuard &&
+      !this.isSampling;
+  }
+  private async requestLiveSkeletonAccess(): Promise<boolean> {
+    if (!this.canRunLiveSkeleton() || !this.liveSkeletonController.isRequested()) {
+      return false;
+    }
+    await this.releasePostureSource();
+    if (!this.canRunLiveSkeleton() || !this.liveSkeletonController.isRequested()) {
+      return false;
+    }
+    const context = this.abilityContext();
+    if (context === undefined) {
+      return false;
+    }
+    try {
+      const result = await abilityAccessCtrl.createAtManager().requestPermissionsFromUser(context, [CAMERA_PERMISSION]);
+      return this.canRunLiveSkeleton() && this.liveSkeletonController.isRequested() && result.authResults.length > 0 &&
+        result.authResults[0] === abilityAccessCtrl.GrantStatus.PERMISSION_GRANTED;
+    } catch (error) {
+      return false;
     }
   }
   private createPostureSource(): PostureSource {
@@ -2254,7 +2314,23 @@ struct Index {
       .backgroundColor(APP_BG)
       .expandSafeArea([SafeAreaType.SYSTEM, SafeAreaType.CUTOUT],
         [SafeAreaEdge.BOTTOM, SafeAreaEdge.START, SafeAreaEdge.END])
+      .bindContentCover($$this.showLiveSkeleton, this.LiveSkeletonPage(), {
+        enableSafeArea: true,
+        onWillDisappear: (): void => { this.closeLiveSkeleton(); },
+        onDisappear: (): void => { this.liveSkeletonClosing = false; }
+      })
     }
+  }
+  @Builder
+  private LiveSkeletonPage() {
+    Stack({ alignContent: Alignment.Top }) {
+      LiveSkeletonMonitorView({ controller: this.liveSkeletonController,
+        monitorState: this.liveSkeletonState, foreground: this.appForeground,
+        contextProvider: (): common.UIAbilityContext | undefined => this.abilityContext(),
+        requestAccess: async (): Promise<boolean> => this.requestLiveSkeletonAccess(),
+        canRun: (): boolean => this.canRunLiveSkeleton(),
+        onClose: (): void => { this.closeLiveSkeleton(); } })
+    }.width('100%').height('100%').backgroundColor(APP_BG)
   }
   @Builder
   private BackgroundGlow() {
@@ -3868,6 +3944,7 @@ struct Index {
   @Builder
   private SettingsPage() {
     Column({ space: 4 }) {
+      this.LiveSkeletonEntry()
       this.AppearancePanel()
       this.CalibrationPanel()
       this.SamplingPanel()
@@ -3896,6 +3973,28 @@ struct Index {
       Text('坐直了 0.2.10').fontSize(11).fontColor(MUTED).margin({ top: 12 })
     }
     .width('100%')
+  }
+  @Builder
+  private LiveSkeletonEntry() {
+    Column({ space: 10 }) {
+      Text('实时骨骼监看').fontSize(17).fontWeight(FontWeight.Bold).fontColor(INK).width('100%')
+      Text('独立连续画面，查看动作和关键点；不评分、不修改基线或统计。')
+        .fontSize(12).fontColor(MUTED).lineHeight(18).width('100%')
+      if (this.liveSkeletonState.cleanupBlocked) {
+        Text('相机尚未释放，暂不能启动守护；请重试释放或重启应用。').fontSize(12).fontColor(RED).width('100%')
+        Button('重试释放相机').id('live-skeleton-retry-release').width('100%').height(40)
+          .fontColor(RED).backgroundColor(RED_SOFT)
+          .enabled(this.liveSkeletonState.phase !== LiveSkeletonPhase.STOPPING)
+          .onClick((): void => { this.liveSkeletonController.stop(); })
+      }
+      Button('打开实时监看').id('live-skeleton-open').width('100%').height(44)
+        .fontColor(GREEN_DEEP).backgroundColor(GREEN_SOFT)
+        .enabled(!this.controlsLocked() && !this.isGuarding && !this.isCalibrating && !this.isSampling)
+        .onClick((): void => { this.openLiveSkeleton(); })
+      if (this.isGuarding || this.isCalibrating) {
+        Text('请先结束守护或校准，再使用独立监看').fontSize(12).fontColor(MUTED).width('100%')
+      }
+    }.width('100%').padding({ top: 12, bottom: 20 }).border({ width: { bottom: 1 }, color: LINE_SOFT })
   }
   @Builder
   private AppearancePanel() {
@@ -4371,7 +4470,8 @@ struct Index {
           contextProvider: (): common.UIAbilityContext | undefined => this.abilityContext(),
           testAllowed: (): boolean => this.loaded && this.activeTab === 3 && !this.controlsLocked() &&
             !this.isGuarding && !this.isCalibrating && !this.isSampling })
-        SkeletonDebugPanel({ active: this.activeTab === 3 && this.appForeground,
+        SkeletonDebugPanel({ active: this.activeTab === 3 && this.appForeground &&
+          !this.showLiveSkeleton && !this.liveSkeletonBusy,
           realSource: this.settings.useCoreVision, guarding: this.isGuarding,
           locked: this.controlsLocked(), intervalMs: this.settings.profile.sampleIntervalMs,
           requestFrame: async (): Promise<void> => { await this.sampleSkeletonOnce(); } })
